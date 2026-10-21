@@ -2,7 +2,7 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610220113"};
+var SITE={feedbackUrl:"",version:"202610220141"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
@@ -20,6 +20,7 @@ async function login(id,pin){
   try{var b=JSON.parse(dec.decode(await aes(bits,b64d(j.iv),b64d(j.ct))))}catch(e){return BAD}
   b.exp=Date.now()+30*864e5;
   post("logEvent","L1",b.user,["sign-in",""]).catch(function(){});
+  setTimeout(logoutBtn,300);
   return {token:"L1."+btoa(unescape(encodeURIComponent(JSON.stringify(b)))),user:b.user};
 }
 function relabel(){try{document.querySelectorAll("label,div,span,p,input").forEach(function(e){
@@ -29,6 +30,24 @@ function relabel(){try{document.querySelectorAll("label,div,span,p,input").forEa
   if(t==="Login ID")e.textContent="Email";else if(t==="PIN")e.textContent="Employee code";
   else if(/Sign in with your login ID and PIN/i.test(t))e.textContent="Sign in with your Smollan email and employee code."})}catch(x){}}
 document.addEventListener("DOMContentLoaded",function(){relabel();setTimeout(relabel,500);setTimeout(relabel,2000)});
+function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function showHL(h){var tries=0;(function go(){var host=document.getElementById("t-overview");
+  if(!host){if(++tries<40)setTimeout(go,250);return}
+  var old=document.getElementById("hlCard");if(old)old.remove();
+  var n=h.outletCount||0,items=(h.outlets||[]).map(function(o){var w=[];if(o.no)w.push(o.no+" promo SKU"+(o.no>1?"s":"")+" not running");if(o.flip)w.push(o.flip+" Yes then No");
+    return '<li><b>'+esc(o.outlet)+'</b> · '+esc(o.account)+'<br><small>'+esc(w.join(", "))+(o.skus.length?' – e.g. '+esc(o.skus.join(", ")):"")+'</small></li>'}).join("");
+  var end=(h.ending||[]).map(function(e){return '<li>'+esc(e.title)+' <small>– ends '+esc(new Date(e.end+"T00:00").toLocaleDateString(undefined,{day:"numeric",month:"short"}))+'</small></li>'}).join("");
+  var c=document.createElement("section");c.id="hlCard";c.className="panel";
+  c.style.cssText="border:1px solid #e0a43a;border-left:6px solid #e0a43a;margin:12px 0";
+  c.innerHTML='<h3 style="margin-top:0">Follow up</h3>'+
+    (n?'<p><b>'+n+'</b> outlet'+(n>1?"s":"")+' with promo SKUs not running or Yes-then-No'+(n>12?" (worst 12 shown)":"")+':</p><ul style="padding-left:18px;margin:6px 0">'+items+'</ul>':'<p>No outlets to chase on promos – everything checked is running. 👍</p>')+
+    '<p style="margin:8px 0 0">'+(h.live||0)+' promo'+((h.live||0)==1?"":"s")+' running in your accounts now – see the <b>Running</b> tab.</p>'+
+    (end?'<p style="margin:8px 0 2px"><b>Ending in the next 3 days:</b></p><ul style="padding-left:18px;margin:4px 0">'+end+'</ul>':"")+
+    (h.report?'<p class="note" style="opacity:.7;margin-top:8px">From '+esc(h.report)+'</p>':"");
+  host.insertBefore(c,host.firstChild)})()}
+function logoutBtn(){if(document.getElementById("lgBtn"))return;var b=document.createElement("button");b.id="lgBtn";b.type="button";b.textContent="Log out";
+  b.style.cssText="position:fixed;right:12px;bottom:12px;z-index:9999;padding:8px 14px;border-radius:18px;border:1px solid #888;background:#1f2a30;color:#fff;font:600 13px system-ui;cursor:pointer;opacity:.9";
+  b.onclick=function(){try{localStorage.clear();sessionStorage.clear()}catch(e){}location.href=location.pathname.replace(/[^\/]*$/,"")+"?out="+Date.now()};document.body.appendChild(b)}
 function tok(t){try{if(!t||t.indexOf("L1.")!==0)return null;var b=JSON.parse(decodeURIComponent(escape(atob(t.slice(3)))));return b.exp>Date.now()?b:null}catch(e){return null}}
 async function data(t,sys){
   var b=tok(t);if(!b)return null;sys=String(sys)==="ib"?"ib":"core";
@@ -37,7 +56,9 @@ async function data(t,sys){
   if(!r.ok)throw new Error("The data has not been published yet. Try again in a few minutes.");
   var buf=new Uint8Array(await r.arrayBuffer());
   post("logEvent","L1",b.user,["open",sys.toUpperCase()]).catch(function(){});
-  return dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
+  var txt=dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
+  try{var hl=JSON.parse(txt).highlights;if(hl)showHL(hl)}catch(x){}
+  return txt;
 }
 async function post(fn,t,user,args){
   if(!SITE.feedbackUrl||SITE.feedbackUrl.indexOf("http")!==0)return {error:"Feedback is not connected yet."};
@@ -46,7 +67,7 @@ async function post(fn,t,user,args){
   return r.json();
 }
 function viaPost(fn){return function(t){var b=tok(t);return post(fn,t,b&&b.user,Array.prototype.slice.call(arguments,1))}}
-var H={login:login,resume:async function(t){var b=tok(t);return b?b.user:null},getData:data,getPortalData:data,
+var H={login:login,resume:async function(t){var b=tok(t);if(b)setTimeout(logoutBtn,300);return b?b.user:null},getData:data,getPortalData:data,
   logEvent:function(t){var b=tok(t);return post("logEvent",t,b&&b.user,Array.prototype.slice.call(arguments,1)).catch(function(){return true})},
   submitFeedback:viaPost("submitFeedback"),getFeedback:viaPost("getFeedback"),respondFeedback:viaPost("respondFeedback")};
 function runner(ok,fail){return new Proxy({},{get:function(_,p){
