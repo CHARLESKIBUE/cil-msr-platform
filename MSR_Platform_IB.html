@@ -2,16 +2,16 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610220055"};
+var SITE={feedbackUrl:"",version:"202610220113"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
 async function sha(t){return hex(await crypto.subtle.digest("SHA-256",enc.encode(t)))}
 async function aes(raw,iv,ct){var k=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);return new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv:iv},k,ct))}
 async function gunzip(u8){var s=new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"));return new Uint8Array(await new Response(s).arrayBuffer())}
-var BAD={error:"That login ID and PIN do not match. Check them or ask your supervisor."};
+var BAD={error:"That email and employee code do not match. Use your Smollan email and your employee code, or ask your supervisor."};
 async function login(id,pin){
-  id=String(id||"").trim().toUpperCase();pin=String(pin||"").trim();
+  id=String(id||"").trim().toUpperCase();pin=String(pin||"").trim().toUpperCase();
   var r=await fetch("k/"+(await sha("cil|"+id))+".json?v="+SITE.version,{cache:"no-store"});
   if(!r.ok)return BAD;
   var j=await r.json();
@@ -22,6 +22,13 @@ async function login(id,pin){
   post("logEvent","L1",b.user,["sign-in",""]).catch(function(){});
   return {token:"L1."+btoa(unescape(encodeURIComponent(JSON.stringify(b)))),user:b.user};
 }
+function relabel(){try{document.querySelectorAll("label,div,span,p,input").forEach(function(e){
+  if(e.tagName==="INPUT"){var ph=(e.placeholder||"");if(/login id/i.test(ph))e.placeholder="name.code@smollan.net";else if(/^pin/i.test(ph))e.placeholder="e.g. 300349";
+    if(e.type==="password"||/pin/i.test(e.id+e.name)){e.setAttribute("inputmode","text");e.removeAttribute("maxlength");e.removeAttribute("pattern")}return}
+  if(e.children.length)return;var t=e.textContent.trim();
+  if(t==="Login ID")e.textContent="Email";else if(t==="PIN")e.textContent="Employee code";
+  else if(/Sign in with your login ID and PIN/i.test(t))e.textContent="Sign in with your Smollan email and employee code."})}catch(x){}}
+document.addEventListener("DOMContentLoaded",function(){relabel();setTimeout(relabel,500);setTimeout(relabel,2000)});
 function tok(t){try{if(!t||t.indexOf("L1.")!==0)return null;var b=JSON.parse(decodeURIComponent(escape(atob(t.slice(3)))));return b.exp>Date.now()?b:null}catch(e){return null}}
 async function data(t,sys){
   var b=tok(t);if(!b)return null;sys=String(sys)==="ib"?"ib":"core";
