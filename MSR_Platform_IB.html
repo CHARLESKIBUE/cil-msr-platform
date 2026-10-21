@@ -2,7 +2,7 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610220141"};
+var SITE={feedbackUrl:"",version:"202610220209"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
@@ -361,7 +361,7 @@ function signOut(){store.set(null);TOKEN=null;USER=null;location.reload()}
 // ---------------- the platform
 function boot(D){
 $("gate").hidden=true;["topbar","main","foot"].forEach(id=>$(id).hidden=false);
-const L=D.lists, F=D.facts, P=D.promo||{rows:[],statuses:[],info:{}}, PR=P.rows, last=L.date.length-1;
+const L=D.lists, F=D.facts, P=D.promo||{rows:[],statuses:[],info:{}}, PR=P.rows, last=(()=>{const c=new Array(L.date.length).fill(0);for(const r of F)c[r[0]]++;const m=[...c].sort((x,y)=>x-y)[Math.floor(c.length/2)]||0;let i=L.date.length-1;while(i>0&&c[i]<Math.max(1,m*0.3))i--;return i})();
 const DIMS=["region","account","supervisor","msr"], DIM={date:0,region:1,account:2,supervisor:3,msr:4,store:5};
 const M={osaA:6,osaN:7,sosS:8,sosN:9,plan:10,done:11,adhoc:12,exempt:13}, NM=14;
 const PD={region:0,account:1,supervisor:2,msr:3,store:4,sku:5}, PST=6, POA=7; // promo row positions; status 0 Activated 1 Inconsistent 2 Not activated 3 Not checked 4 Not visited
@@ -830,6 +830,7 @@ if($("so"))$("so").onclick=signOut;
 applyParams(INIT&&INIT.params?new URLSearchParams(INIT.params):new URLSearchParams(location.hash.slice(1)));
 if(USER&&!(INIT&&INIT.params)){const pick=(k,v)=>{if(!v||S[k]!=="")return;const i=L[k].indexOf(String(v).trim().toUpperCase());if(i>=0)S[k]=String(i)};
  if(USER.role==="MSR")pick("msr",USER.name);if(USER.role==="SUPERVISOR")pick("supervisor",USER.supervisor||USER.name);else pick("supervisor",USER.supervisor);pick("region",USER.region)}
+if(USER&&USER.role==="MSR"){for(let k=GROUPS.length-1;k>=0;k--)if(["msr","supervisor","region"].includes(GROUPS[k][0]))GROUPS.splice(k,1);if(!GROUPS.some(g=>g[0]===S.group))S.group="account";}
 render();
 }
 </script></body></html>
