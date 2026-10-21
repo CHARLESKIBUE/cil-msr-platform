@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
+   Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
+(function(){
+var SITE={feedbackUrl:"",version:"202610220055"};
+var enc=new TextEncoder(),dec=new TextDecoder();
+function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
+function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
+async function sha(t){return hex(await crypto.subtle.digest("SHA-256",enc.encode(t)))}
+async function aes(raw,iv,ct){var k=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);return new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv:iv},k,ct))}
+async function gunzip(u8){var s=new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"));return new Uint8Array(await new Response(s).arrayBuffer())}
+var BAD={error:"That login ID and PIN do not match. Check them or ask your supervisor."};
+async function login(id,pin){
+  id=String(id||"").trim().toUpperCase();pin=String(pin||"").trim();
+  var r=await fetch("k/"+(await sha("cil|"+id))+".json?v="+SITE.version,{cache:"no-store"});
+  if(!r.ok)return BAD;
+  var j=await r.json();
+  var base=await crypto.subtle.importKey("raw",enc.encode(pin),"PBKDF2",false,["deriveBits"]);
+  var bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:b64d(j.salt),iterations:j.iter},base,256);
+  try{var b=JSON.parse(dec.decode(await aes(bits,b64d(j.iv),b64d(j.ct))))}catch(e){return BAD}
+  b.exp=Date.now()+30*864e5;
+  post("logEvent","L1",b.user,["sign-in",""]).catch(function(){});
+  return {token:"L1."+btoa(unescape(encodeURIComponent(JSON.stringify(b)))),user:b.user};
+}
+function tok(t){try{if(!t||t.indexOf("L1.")!==0)return null;var b=JSON.parse(decodeURIComponent(escape(atob(t.slice(3)))));return b.exp>Date.now()?b:null}catch(e){return null}}
+async function data(t,sys){
+  var b=tok(t);if(!b)return null;sys=String(sys)==="ib"?"ib":"core";
+  var e=b.keys[sys];if(!e)throw new Error("There is no "+sys.toUpperCase()+" data for this login.");
+  var r=await fetch("data/"+e.f+".bin?v="+SITE.version,{cache:"no-store"});
+  if(!r.ok)throw new Error("The data has not been published yet. Try again in a few minutes.");
+  var buf=new Uint8Array(await r.arrayBuffer());
+  post("logEvent","L1",b.user,["open",sys.toUpperCase()]).catch(function(){});
+  return dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
+}
+async function post(fn,t,user,args){
+  if(!SITE.feedbackUrl||SITE.feedbackUrl.indexOf("http")!==0)return {error:"Feedback is not connected yet."};
+  var r=await fetch(SITE.feedbackUrl,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify({fn:fn,user:user,proof:user&&user.fb,args:args})});
+  return r.json();
+}
+function viaPost(fn){return function(t){var b=tok(t);return post(fn,t,b&&b.user,Array.prototype.slice.call(arguments,1))}}
+var H={login:login,resume:async function(t){var b=tok(t);return b?b.user:null},getData:data,getPortalData:data,
+  logEvent:function(t){var b=tok(t);return post("logEvent",t,b&&b.user,Array.prototype.slice.call(arguments,1)).catch(function(){return true})},
+  submitFeedback:viaPost("submitFeedback"),getFeedback:viaPost("getFeedback"),respondFeedback:viaPost("respondFeedback")};
+function runner(ok,fail){return new Proxy({},{get:function(_,p){
+  if(p==="withSuccessHandler")return function(f){return runner(f,fail)};
+  if(p==="withFailureHandler")return function(f){return runner(ok,f)};
+  return function(){var a=arguments;Promise.resolve().then(function(){if(!H[p])throw new Error("Not available: "+p);return H[p].apply(null,a)})
+    .then(function(v){ok&&ok(v)}).catch(function(e){fail&&fail(e)})}}})}
+window.google={script:{run:runner(null,null)}};
+})();
+</script><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E4F9C">
+<title>CIL MSR Portal</title>
+<style>
+/* Layout: fixed blue sidebar + white working area (stacks to a top bar and bottom tabs on phones) */
+:root{--side:#0E4F9C;--side2:#0B4486;--red:#D62832;--ink:#1B2433;--muted:#667085;--line:#E6EAF0;--bg:#F2F4F8;--card:#FFFFFF;
+--good:#1B8A4B;--warn:#C27A06;--bad:#D62832;--goodbg:#E5F4EB;--warnbg:#FDF1DC;--badbg:#FCE6E7;--blue:#2F6FD6;--violet:#8A4FD8;--orange:#E07B12;
+--font:"Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;color-scheme:light}
+*{box-sizing:border-box}html,body{margin:0}[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--font);font-variant-numeric:tabular-nums;-webkit-text-size-adjust:100%}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+/* sign in */
+#gate{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:20px;background:linear-gradient(160deg,var(--side) 0%,var(--side2) 55%,#08386F 100%)}
+.gcard{background:#fff;border-radius:22px;padding:28px 26px;width:100%;max-width:400px;box-shadow:0 20px 50px rgba(5,25,60,.35)}
+.logo{display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:18px}
+.logo b{font-size:30px;letter-spacing:2px;color:var(--side);font-weight:800}
+.logo span{font-size:12px;letter-spacing:1.5px;color:var(--muted);font-weight:600}
+.gcard h1{font-size:20px;margin:0 0 4px}.gcard p{margin:0 0 18px;color:var(--muted);font-size:14px}
+.fld{display:block;font-size:13px;color:var(--muted);margin-bottom:12px;font-weight:600}
+.fld input,.fld select,.fld textarea{display:block;width:100%;margin-top:5px;min-height:46px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px 12px;font-size:16px;color:var(--ink);font-weight:400}
+.fld textarea{min-height:120px;resize:vertical}
+.bigbtn{width:100%;min-height:48px;border:0;border-radius:12px;background:var(--red);color:#fff;font-weight:700;font-size:16px;cursor:pointer}
+.bigbtn:disabled{opacity:.6}
+.err{color:var(--bad);font-size:14px;min-height:20px;margin-top:8px}
+/* shell */
+.shell{display:grid;grid-template-columns:270px minmax(0,1fr);min-height:100vh}
+aside{background:var(--side);color:#fff;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:26px 22px 20px;border-bottom:1px solid rgba(255,255,255,.12);text-align:center}
+.brand .lc{background:#fff;border-radius:16px;padding:16px 10px;display:block}
+.brand .lc b{font-size:26px;letter-spacing:2px;color:var(--side);font-weight:800}
+.brand small{display:block;margin-top:12px;font-size:12px;letter-spacing:1.2px;opacity:.85;font-weight:600}
+nav.side{padding:18px 14px;display:grid;gap:6px;flex:1;overflow:auto;align-content:start}
+nav.side button{display:flex;align-items:center;gap:14px;width:100%;border:0;background:none;color:#fff;font-size:16px;padding:12px 16px;border-radius:14px;cursor:pointer;text-align:left}
+nav.side button:hover{background:rgba(255,255,255,.08)}
+nav.side button[aria-current="page"]{background:var(--red);font-weight:700;box-shadow:0 6px 14px rgba(0,0,0,.18)}
+nav.side svg,.bottom svg{width:22px;height:22px;flex:0 0 auto}
+.powered{padding:16px 20px;font-size:11px;letter-spacing:1px;display:flex;justify-content:space-between;background:rgba(0,0,0,.12)}
+.powered b{letter-spacing:2px}
+main{min-width:0;display:flex;flex-direction:column}
+header.top{background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:16px 28px;position:sticky;top:0;z-index:5}
+header.top h1{font-size:24px;margin:0;font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ibtn{width:42px;height:42px;border-radius:12px;border:0;background:none;display:grid;place-items:center;cursor:pointer;color:var(--ink)}
+.ibtn:hover{background:var(--bg)}.ibtn svg{width:22px;height:22px}
+.who{text-align:right;line-height:1.2}.who b{display:block;font-size:15px}.who span{font-size:12px;color:var(--red);font-weight:700;letter-spacing:.5px}
+.sys{display:flex;background:var(--bg);border-radius:12px;padding:3px}
+.sys button{border:0;background:none;padding:7px 14px;border-radius:10px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted)}
+.sys button[aria-pressed="true"]{background:#fff;color:var(--side);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.content{padding:22px 28px 40px;display:grid;gap:18px;max-width:1400px;width:100%}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between}
+.stamp{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}.stamp svg{width:16px;height:16px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{min-height:38px;padding:0 14px;border-radius:19px;border:1px solid var(--line);background:#fff;cursor:pointer;font-size:14px;font-weight:600;color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--side);color:#fff;border-color:var(--side)}
+.sel{min-height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 10px;font-size:14px;max-width:220px}
+/* cards */
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.card{background:var(--card);border-radius:22px;padding:22px 26px;box-shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.04);min-width:0}
+.stat{display:flex;flex-direction:column;gap:6px;text-align:left;border:0;width:100%;font:inherit;color:inherit}
+button.stat{cursor:pointer}button.stat:hover{box-shadow:0 4px 14px rgba(16,24,40,.1)}
+.stat .lab{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:700;letter-spacing:.9px;color:#344054;text-transform:uppercase}
+.stat .lab svg{width:22px;height:22px}
+.stat .num{font-size:38px;font-weight:700;line-height:1.05;margin-top:6px}
+.stat .sub{font-size:14px;color:var(--muted)}
+.stat .sub em{font-style:normal;font-weight:600}
+.meter{height:6px;border-radius:3px;background:#EEF1F5;margin-top:8px;overflow:hidden}.meter i{display:block;height:100%;border-radius:3px}
+.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}.blue{color:var(--blue)}.violet{color:var(--violet)}.orange{color:var(--orange)}
+.bg-good{background:var(--good)}.bg-warn{background:var(--warn)}.bg-bad{background:var(--bad)}.bg-none{background:#C9D0DA}
+.card h2{font-size:14px;letter-spacing:.9px;text-transform:uppercase;margin:0 0 14px;font-weight:700;color:#344054;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card h2 small{font-size:13px;letter-spacing:0;text-transform:none;color:var(--muted);font-weight:400}
+.tbl{overflow-x:auto;margin:0 -6px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;white-space:normal}
+th{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+tr.go{cursor:pointer}tr.go:hover td{background:#F7F9FC}
+td small{display:block;color:var(--muted);font-size:12px}
+.pill{display:inline-block;min-width:58px;text-align:center;border-radius:8px;padding:3px 8px;font-weight:700;font-size:13px}
+.p-good{background:var(--goodbg);color:var(--good)}.p-warn{background:var(--warnbg);color:var(--warn)}.p-bad{background:var(--badbg);color:var(--bad)}.p-none{background:#EEF1F5;color:var(--muted)}
+.prog{display:flex;align-items:center;gap:10px;justify-content:flex-end}.prog .meter{width:110px;margin:0}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
+.list li:last-child{border-bottom:0}.list b{display:block;font-weight:600}.list small{color:var(--muted);font-size:13px}
+.empty{color:var(--muted);text-align:center;padding:18px 0}
+.more{width:100%;min-height:42px;margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#fff;font-weight:700;cursor:pointer;color:var(--side)}
+.back{border:0;background:none;color:var(--side);font-weight:700;cursor:pointer;padding:0;font-size:14px}
+.search{min-height:42px;border:1px solid var(--line);border-radius:12px;padding:0 12px;width:100%;max-width:320px;background:#fff}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+.chart svg{width:100%;height:auto;display:block}
+.legend{display:flex;gap:16px;font-size:13px;color:var(--muted);margin-bottom:6px;flex-wrap:wrap}.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.tip{font-size:13px;color:var(--muted);min-height:18px}
+.hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.avatar{width:54px;height:54px;border-radius:16px;background:var(--side);color:#fff;display:grid;place-items:center;font-weight:800;font-size:20px}
+.hero h2{margin:0;font-size:22px;letter-spacing:0;text-transform:none;color:var(--ink)}.hero p{margin:2px 0 0;color:var(--muted)}
+.badge{display:inline-block;border-radius:8px;padding:3px 9px;font-size:12px;font-weight:700}
+#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;z-index:60;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+.bottom{display:none}
+@media (max-width:1100px){.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){
+ .shell{grid-template-columns:1fr}aside{display:none}
+ header.top{padding:12px 16px calc(12px) 16px;top:0;padding-top:calc(12px + env(safe-area-inset-top,0px))}
+ header.top h1{font-size:19px}.who{display:none}
+ .content{padding:16px 16px calc(96px + env(safe-area-inset-bottom,0px));gap:14px}
+ .card{padding:18px;border-radius:18px}.stat .num{font-size:30px}
+ .two{grid-template-columns:1fr}
+ .bottom{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--side);padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px))}
+ .bottom button{border:0;background:none;color:#fff;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;padding:6px 2px;border-radius:12px;cursor:pointer;opacity:.85}
+ .bottom button[aria-current="page"]{background:var(--red);opacity:1;font-weight:700}
+}
+@media (max-width:520px){.grid4,.grid3{grid-template-columns:1fr 1fr;gap:12px}.stat .lab{font-size:11px;letter-spacing:.5px}.stat .num{font-size:26px}.stat .sub{font-size:12.5px}.card{padding:15px}.sel{max-width:46vw}}
+</style></head><body>
+<div id="gate"><div class="gcard" id="gateCard"></div></div>
+<div class="shell" id="shell" hidden>
+ <aside>
+  <div class="brand"><span class="lc"><b>SMOLLAN</b></span><small>CIL · MSR PORTAL</small></div>
+  <nav class="side" id="sideNav"></nav>
+  <div class="powered"><span>POWERED BY</span><b>SMOLLAN</b></div>
+ </aside>
+ <main>
+  <header class="top">
+   <h1 id="ttl">Dashboard</h1>
+   <div class="sys" id="sysSw" role="group" aria-label="Project"><button type="button" data-s="core">Core</button><button type="button" data-s="ib">IB</button></div>
+   <button class="ibtn" type="button" id="reload" aria-label="Refresh data" title="Refresh data"></button>
+   <div class="who"><b id="whoName"></b><span id="whoRole"></span></div>
+   <button class="ibtn" type="button" id="signOut" aria-label="Sign out" title="Sign out"></button>
+  </header>
+  <div class="content" id="content"></div>
+ </main>
+</div>
+<nav class="bottom" id="bottomNav" hidden></nav>
+<div id="toast" role="status"></div>
+<script>
+const INIT={"system":(new URLSearchParams(location.search).get("system")||"core").toLowerCase()==="ib"?"ib":"core","portal":true};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const WEB=!!(window.google&&google.script&&google.script.run);
+function call(fn,...a){return new Promise((res,rej)=>{google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...a)})}
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("on");clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove("on"),2600)}
+const store={get(){try{return localStorage.getItem("msrportal_token")}catch(e){return null}},set(v){try{v?localStorage.setItem("msrportal_token",v):localStorage.removeItem("msrportal_token")}catch(e){}}};
+const ICON={
+ dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
+ msr:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>',
+ msrs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/><path d="M16 4.1a4 4 0 0 1 0 7.8M22 21c0-3-1.8-5.6-4.5-6.6"/></svg>',
+ promo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
+ checks:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 12l2 2 4-4M9 17h6"/></svg>',
+ feedback:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M8 9h8M8 13h5"/></svg>',
+ refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8"/><path d="M21 3v5h-5M3 21v-5h5"/></svg>',
+ out:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>',
+ clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+ target:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
+ alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>',
+ bars:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 20v-6M12 20V4M18 20v-9"/></svg>',
+ warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17v.5"/></svg>',
+ shelf:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5h18M3 12h18M3 19h18M7 5v3M12 12v3M16 5v3M9 19v-3"/></svg>',
+ star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z"/></svg>'};
+const VIEWS_TEAM=[["dash","Dashboard"],["msrs","MSR Reports"],["promo","Promo Progress"],["checks","Store Checks"],["feedback","Feedback"]];
+// an MSR only ever sees their own report (the server also sends only their rows)
+const VIEWS_MSR=[["msr","My Report"],["promo","My Promos"],["checks","Store Checks"],["feedback","Feedback"]];
+const isMsr=()=>!!(USER&&USER.role==="MSR");
+let VIEWS=VIEWS_TEAM;
+let TOKEN=null,USER=null,SYS=(INIT&&INIT.system)||"core";
+
+// ---------------------------------------------------------------- sign in
+function gate(html){$("gate").hidden=false;$("shell").hidden=true;$("bottomNav").hidden=true;$("gateCard").innerHTML=`<div class="logo"><b>SMOLLAN</b><span>CIL · MSR PORTAL</span></div>`+html}
+function showLogin(msg){gate(`<h1>Sign in</h1><p>Use your login ID and PIN to see your team's MSR reports and promo progress.</p>
+ <form id="lf" autocomplete="on"><label class="fld">Login ID<input id="lid" autocomplete="username" autocapitalize="characters" required></label>
+ <label class="fld">PIN<input id="lpin" type="password" inputmode="numeric" autocomplete="current-password" required></label>
+ <button class="bigbtn" id="lbtn">Sign in</button><div class="err" id="lerr" role="alert">${esc(msg||"")}</div></form>`);
+ $("lid").focus();
+ $("lf").onsubmit=e=>{e.preventDefault();const b=$("lbtn");b.disabled=true;b.textContent="Signing in…";$("lerr").textContent="";
+  call("login",$("lid").value.trim(),$("lpin").value.trim()).then(r=>{
+   if(!r||r.error){b.disabled=false;b.textContent="Sign in";$("lerr").textContent=r&&r.error||"Sign-in failed. Try again.";return}
+   TOKEN=r.token;USER=r.user;store.set(TOKEN);load()}).catch(()=>{b.disabled=false;b.textContent="Sign in";$("lerr").textContent="Could not reach the server. Check your connection and try again."})}}
+function load(){if(USER&&USER.project&&!load.done){load.done=1;SYS=String(USER.project).toUpperCase()==="IB"?"ib":"core"}
+ gate(`<h1>Loading…</h1><p>Getting your team's latest numbers.</p>`);
+ call("getPortalData",TOKEN,SYS).then(j=>{if(!j){store.set(null);showLogin("Your session has ended. Sign in again.");return}boot(JSON.parse(j))})
+ .catch(e=>gate(`<h1>Could not load the data</h1><p>${esc(e&&e.message||"Unknown error")}</p><button class="bigbtn" type="button" onclick="load()">Try again</button>`))}
+function signOut(){store.set(null);TOKEN=null;USER=null;showLogin()}
+(function start(){
+ if(!WEB){gate(`<h1>Open the portal link</h1><p>This page works from the web app link (…/exec?view=portal).</p>`);return}
+ TOKEN=store.get();if(!TOKEN){showLogin();return}
+ gate(`<h1>Signing in…</h1>`);
+ call("resume",TOKEN).then(u=>{if(u){USER=u;load()}else{store.set(null);showLogin()}}).catch(()=>showLogin())})();
+
+// ---------------------------------------------------------------- portal
+let D,S={view:"dash",period:"7",account:"",msr:"",supervisor:"",q:"",msrLimit:40,yetLimit:20,chkLimit:20};
+function boot(data){
+ D=data;$("gate").hidden=true;$("shell").hidden=false;$("bottomNav").hidden=false;
+ S.account="";S.msr="";S.supervisor="";
+ $("whoName").textContent=USER?USER.name:"";$("whoRole").textContent=USER?({SUPERVISOR:"SUPERVISOR",MSR:"MSR",MANAGER:"MANAGER",ADMIN:"SYSTEM ADMIN"}[USER.role]||USER.role):"";
+ $("reload").innerHTML=ICON.refresh;$("signOut").innerHTML=ICON.out;
+ $("reload").onclick=()=>load();$("signOut").onclick=signOut;
+ $("sysSw").hidden=isMsr();document.querySelectorAll("#sysSw button").forEach(b=>{b.setAttribute("aria-pressed",b.dataset.s===SYS);b.onclick=()=>{if(SYS!==b.dataset.s){SYS=b.dataset.s;load()}}});
+ VIEWS=isMsr()?VIEWS_MSR:VIEWS_TEAM;$("bottomNav").style.gridTemplateColumns=`repeat(${VIEWS.length},1fr)`;
+ const nav=VIEWS.map(([k,l])=>`<button type="button" data-v="${k}">${ICON[k]}<span>${l}</span></button>`).join("");
+ $("sideNav").innerHTML=nav;$("bottomNav").innerHTML=VIEWS.map(([k,l])=>`<button type="button" data-v="${k}">${ICON[k]}<span>${l.startsWith("My ")?l:l.split(" ")[0]}</span></button>`).join("");
+ document.querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>go(b.dataset.v));
+ if(isMsr()){S.msr=D.scope&&D.scope.msr!=null?String(D.scope.msr):"";S.msrView=D.scope&&D.scope.msr!=null?D.scope.msr:-1;
+  if(!["msr","promo","checks","feedback"].includes(S.view))S.view="msr"}
+ render();
+}
+function go(v,extra){if(isMsr()){if(v==="dash"||v==="msrs")v="msr";extra=null;S.msrView=S.msr===""?-1:+S.msr}
+ Object.assign(S,{view:v},extra||{});render();scrollTo({top:0});if(WEB&&TOKEN)call("logEvent",TOKEN,"portal",v).catch(()=>{})}
+
+// helpers
+const L=()=>D.lists, last=()=>D.lists.date.length-1;
+const fi=n=>Math.round(n||0).toLocaleString();
+const pct=v=>v==null||isNaN(v)?"–":(Math.round(v*1000)/10).toFixed(v>=.995||v<.1?0:1).replace(/\.0$/,"")+"%";
+const tc=s=>String(s??"").toLowerCase().replace(/(^|[\s(\-\/])(\w)/g,(a,b,c)=>b+c.toUpperCase());
+const dLab=(i,o={day:"numeric",month:"short"})=>i==null||i<0?"":new Date(D.lists.date[i]+"T00:00").toLocaleDateString(undefined,o);
+const dIso=(s,o={day:"numeric",month:"short"})=>s?new Date(String(s).slice(0,10)+"T00:00").toLocaleDateString(undefined,o):"";
+const rag=(v,t)=>v==null?"none":v>=t[0]?"good":v>=t[1]?"warn":"bad";
+const T=()=>D.targets;
+function range(){const n=last();if(n<0)return[0,-1];const ld=new Date(D.lists.date[n]+"T00:00");
+ const back=k=>{const c=new Date(ld);c.setDate(c.getDate()-k+1);const iso=c.toISOString().slice(0,10);const i=D.lists.date.findIndex(d=>d>=iso);return i<0?n:i};
+ if(S.period==="latest")return[n,n];if(S.period==="7")return[back(7),n];if(S.period==="30")return[back(30),n];
+ const mon=D.lists.date[n].slice(0,7);return[D.lists.date.findIndex(d=>d.startsWith(mon)),n]}
+const PERIODS=[["latest","Latest day"],["7","Last 7 days"],["mtd","Month to date"],["30","Last 30 days"]];
+function pass(r,skip){if(S.account!==""&&skip!=="account"&&r[2]!==+S.account)return false;if(S.supervisor!==""&&skip!=="supervisor"&&r[3]!==+S.supervisor)return false;if(S.msr!==""&&skip!=="msr"&&r[4]!==+S.msr)return false;return true}
+function inR(r,a,b){return r[0]>=a&&r[0]<=b}
+function agg(rows){const s={osaA:0,osaN:0,sosS:0,sosN:0,plan:0,done:0,adhoc:0,ex:0};for(const r of rows){s.osaA+=r[6];s.osaN+=r[7];s.sosS+=r[8];s.sosN+=r[9];s.plan+=r[10];s.done+=r[11];s.adhoc+=r[12];s.ex+=r[13]}
+ s.osa=s.osaN?s.osaA/s.osaN:null;s.sos=s.sosN?s.sosS/s.sosN:null;s.cov=s.plan?s.done/s.plan:null;s.miss=Math.max(0,s.plan-s.done);return s}
+// promo rows: region, account, supervisor, msr, store, sku, status, outlet activated
+function ppass(r,skip){if(S.account!==""&&r[1]!==+S.account)return false;if(S.supervisor!==""&&r[2]!==+S.supervisor)return false;if(S.msr!==""&&skip!=="msr"&&r[3]!==+S.msr)return false;return true}
+function pAgg(rows){const o=new Map();let a=0;for(const r of rows){if(r[6]===0)a++;let q=o.get(r[4]);if(!q){q={a:0,v:0,n:0,run:0,acc:r[1],sup:r[2],msr:r[3],store:r[4]};o.set(r[4],q)}q.n++;if(r[6]===0)q.run++;if(r[7]===1||(r[7]===undefined&&r[6]===0))q.a=1;if(r[6]<4)q.v=1}
+ let oa=0;for(const q of o.values())if(q.a)oa++;return{slots:rows.length,run:a,outlets:o.size,act:oa,rate:o.size?oa/o.size:null,map:o}}
+function card(o){const t=o.tag||"div";return `<${t} class="card stat"${o.go?` type="button" data-go="${o.go}"`:""}><div class="lab"><span>${o.label}</span><span class="${o.ic[1]}">${ICON[o.ic[0]]}</span></div>
+ <div class="num ${o.cls||""}">${o.value}</div>${o.sub?`<div class="sub">${o.sub}</div>`:""}${o.meter!=null?`<div class="meter"><i class="bg-${o.mcls||"none"}" style="width:${Math.max(0,Math.min(1,o.meter))*100}%"></i></div>`:""}</${t}>`}
+function opts(key,idxs,all){return `<option value="">${all}</option>`+idxs.sort((a,b)=>D.lists[key][a].localeCompare(D.lists[key][b])).map(i=>`<option value="${i}">${esc(tc(D.lists[key][i]))}</option>`).join("")}
+function toolbar(withMsr){const [a,b]=range();const F=D.facts;
+ const accs=new Set(),sups=new Set(),msrs=new Set();
+ for(const r of F){if(!inR(r,a,b))continue;if(pass(r,"account"))accs.add(r[2]);if(pass(r,"supervisor"))sups.add(r[3]);if(pass(r,"msr"))msrs.add(r[4])}
+ for(const r of D.promo.rows){if(ppass(r))accs.add(r[1])}
+ const showSup=USER&&(USER.role==="MANAGER"||USER.role==="ADMIN");const showMsr=withMsr&&!(USER&&USER.role==="MSR");
+ return `<div class="bar"><div class="stamp">${ICON.clock}<span>Data to ${dLab(last(),{weekday:"short",day:"numeric",month:"short"})} · updated ${esc(D.generated)}</span></div>
+ <div class="chips">${PERIODS.map(([k,l])=>`<button class="chip" type="button" data-p="${k}" aria-pressed="${S.period===k}">${l}</button>`).join("")}
+ ${showSup?`<select class="sel" id="fSup" aria-label="Supervisor">${opts("supervisor",[...sups],"All supervisors")}</select>`:""}
+ <select class="sel" id="fAcc" aria-label="Account">${opts("account",[...accs],"All accounts")}</select>
+ ${showMsr?`<select class="sel" id="fMsr" aria-label="MSR">${opts("msr",[...msrs],"All MSRs")}</select>`:""}</div></div>`}
+function wireToolbar(){document.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{S.period=b.dataset.p;render()});
+ [["fSup","supervisor"],["fAcc","account"],["fMsr","msr"]].forEach(([id,k])=>{const el=$(id);if(!el)return;el.value=S[k];el.onchange=()=>{S[k]=el.value;if(k==="supervisor")S.msr="";render()}})}
+
+function render(){
+ const v=S.view==="msr"&&!isMsr()?"msrs":S.view;
+ document.querySelectorAll("[data-v]").forEach(b=>b.setAttribute("aria-current",b.dataset.v===v?"page":"false"));
+ const title=(isMsr()?{msr:"My Report",promo:"My Promos"}:{})[S.view]||{dash:"Dashboard",msrs:"MSR Reports",msr:"MSR Report",promo:"Promo Progress",checks:"Store Checks",feedback:"Feedback"}[S.view];
+ $("ttl").textContent=title+(SYS==="ib"?" · IB":"");document.title=`${title} · CIL MSR Portal`;
+ if(S.view==="dash")viewDash();else if(S.view==="msrs")viewMsrs();else if(S.view==="msr")viewMsr();else if(S.view==="promo")viewPromo();else if(S.view==="checks")viewChecks();else viewFeedback();
+ wireToolbar();document.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>go(b.dataset.go));
+}
+function teamRows(rows){const g=new Map();for(const r of rows){(g.get(r[4])||g.set(r[4],[]).get(r[4])).push(r)}
+ const pr=new Map();for(const r of D.promo.rows){if(!ppass(r,"msr"))continue;(pr.get(r[3])||pr.set(r[3],[]).get(r[3])).push(r)}
+ return [...g].map(([id,rs])=>{const s=agg(rs),p=pAgg(pr.get(id)||[]);let lastD=-1,sup=new Map();for(const r of rs){if((r[11]>0||r[7]>0)&&r[0]>lastD)lastD=r[0];sup.set(r[3],(sup.get(r[3])||0)+1)}
+  return {id,name:tc(D.lists.msr[id]),sup:tc(D.lists.supervisor[[...sup].sort((a,b)=>b[1]-a[1])[0][0]]),s,p,lastD}})}
+
+// ---------------------------------------------------------------- dashboard
+function viewDash(){const [a,b]=range(),n=last(),F=D.facts;
+ const day=agg(F.filter(r=>r[0]===n&&pass(r))),per=agg(F.filter(r=>inR(r,a,b)&&pass(r)));
+ const p=pAgg(D.promo.rows.filter(r=>ppass(r)));
+ const xd=new Set();for(const r of D.prop.rows)if(inR(r,a,b)&&pass(r)&&r[7]>0)xd.add(r[5]);
+ const pl=PERIODS.find(x=>x[0]===S.period)[1].toLowerCase(),t=T();
+ const team=teamRows(F.filter(r=>inR(r,a,b)&&pass(r))).sort((x,y)=>(x.s.cov??2)-(y.s.cov??2));
+ const below=team.filter(o=>(o.s.cov!=null&&o.s.cov<t.cov[1])||(o.s.osa!=null&&o.s.osa<t.osa[1]));
+ $("content").innerHTML=toolbar(true)+`<div class="grid4">
+ ${card({label:"Coverage today",ic:["target","blue"],value:pct(day.cov),cls:day.cov==null?"":rag(day.cov,t.cov),sub:`${fi(day.done)} / ${fi(day.plan)} visits · <em class="blue">${fi(day.plan-day.adhoc)} planned</em> · <em class="orange">${fi(day.adhoc)} ad hoc</em>`,meter:day.cov,mcls:rag(day.cov,t.cov)})}
+ ${card({label:"Missed today",ic:["alert","bad"],value:fi(day.miss),cls:day.miss?"bad":"good",sub:`of ${fi(day.plan)} visits · ${fi(day.ex)} on leave or off`,tag:"button",go:"msrs"})}
+ ${card({label:"Coverage · "+pl,ic:["bars","violet"],value:pct(per.cov),cls:per.cov==null?"":rag(per.cov,t.cov),sub:`${fi(per.done)} / ${fi(per.plan)} visits · <em class="orange">${fi(per.adhoc)} ad hoc</em>`,meter:per.cov,mcls:rag(per.cov,t.cov)})}
+ ${card({label:"Missed · "+pl,ic:["warn","orange"],value:fi(per.miss),cls:per.miss?"bad":"good",sub:`of ${fi(per.plan)} visits · ${fi(per.ex)} on leave or off`,tag:"button",go:"msrs"})}
+ ${card({label:"On-shelf availability",ic:["shelf","blue"],value:pct(per.osa),cls:rag(per.osa,t.osa),sub:`${fi(per.osaA)} of ${fi(per.osaN)} SKU checks in stock`,meter:per.osa,mcls:rag(per.osa,t.osa)})}
+ ${card({label:"Share of shelf",ic:["bars","violet"],value:pct(per.sos),cls:rag(per.sos,t.sos),sub:`Average of ${fi(per.sosN)} readings`,meter:per.sos,mcls:rag(per.sos,t.sos)})}
+ ${card({label:"Promo activation",ic:["promo","bad"],value:pct(p.rate),cls:rag(p.rate,t.promo),sub:`${fi(p.act)} of ${fi(p.outlets)} outlets activated`,meter:p.rate,mcls:rag(p.rate,t.promo),tag:"button",go:"promo"})}
+ ${card({label:"Extra displays",ic:["star","orange"],value:fi(xd.size),sub:"Outlets with an unpaid display",tag:"button",go:"checks"})}
+ </div>
+ <div class="card"><h2>Daily trend <small>${dLab(a)} to ${dLab(b)}</small></h2><div class="legend"><span><i style="background:var(--blue)"></i>Coverage</span><span><i style="background:var(--good)"></i>OSA</span><span><i style="background:var(--violet)"></i>SOS</span></div><div class="chart" id="trend"></div><div class="tip" id="tip"></div></div>
+ <div class="card"><h2>Team at a glance <small>${team.length} MSRs · lowest coverage first · tap a name for the full report</small></h2>${teamTable(team.slice(0,12))}
+ ${team.length>12?`<button class="more" type="button" data-go="msrs">See all ${team.length} MSR reports</button>`:""}</div>
+ <div class="card"><h2>Needs attention <small>MSRs below ${pct(t.cov[1])} coverage or ${pct(t.osa[1])} OSA</small></h2>${below.length?`<ul class="list">${below.slice(0,8).map(o=>`<li class="go" data-msr="${o.id}" style="cursor:pointer"><span><b>${esc(o.name)}</b><small>${esc(o.sup)} · ${fi(o.s.miss)} visits missed</small></span><span><span class="pill p-${rag(o.s.cov,t.cov)}">Cov ${pct(o.s.cov)}</span> <span class="pill p-${rag(o.s.osa,t.osa)}">OSA ${pct(o.s.osa)}</span></span></li>`).join("")}</ul>`:'<p class="empty">Everyone is above the alert levels for this period.</p>'}</div>`;
+ drawTrend(F.filter(r=>inR(r,a,b)&&pass(r)),a,b);wireMsrLinks()}
+function teamTable(list){const t=T();if(!list.length)return '<p class="empty">No field data for this selection.</p>';
+ return `<div class="tbl"><table><thead><tr><th>MSR</th><th>Coverage</th><th>Visits done</th><th>Missed</th><th>OSA</th><th>SOS</th><th>Promo outlets</th><th>Last active</th></tr></thead><tbody>${
+ list.map(o=>`<tr class="go" data-msr="${o.id}" tabindex="0"><td><b>${esc(o.name)}</b><small>${esc(o.sup)}</small></td><td><span class="pill p-${rag(o.s.cov,t.cov)}">${pct(o.s.cov)}</span></td><td>${fi(o.s.done)} / ${fi(o.s.plan)}</td><td class="${o.s.miss?"bad":""}">${fi(o.s.miss)}</td>
+ <td><span class="pill p-${rag(o.s.osa,t.osa)}">${pct(o.s.osa)}</span></td><td>${pct(o.s.sos)}</td><td>${o.p.outlets?`${fi(o.p.act)} / ${fi(o.p.outlets)}`:"–"}</td><td>${o.lastD>=0?dLab(o.lastD,{weekday:"short",day:"numeric",month:"short"}):"–"}</td></tr>`).join("")}</tbody></table></div>`}
+function wireMsrLinks(){document.querySelectorAll("[data-msr]").forEach(el=>{const f=()=>go("msr",{msrView:+el.dataset.msr});el.onclick=f;el.onkeydown=e=>{if(e.key==="Enter")f()}})}
+
+function lineChart(el,days,series,t){
+ const W=Math.max(320,el.clientWidth||800),H=W<520?200:240,pl=40,pr=12,pt=12,pb=26;
+ const all=series.flatMap(s=>s.vals).filter(v=>v!=null);if(!all.length){el.innerHTML='<p class="empty">No readings for this period.</p>';return}
+ let lo=Math.max(0,Math.floor((Math.min(...all)-.05)*10)/10),hi=Math.min(1,Math.ceil((Math.max(...all)+.03)*10)/10);if(hi-lo<.2)lo=Math.max(0,hi-.2);
+ const x=i=>pl+(days.length<2?(W-pl-pr)/2:i*(W-pl-pr)/(days.length-1)),y=v=>pt+(hi-v)/(hi-lo)*(H-pt-pb);
+ let g="";const gs=hi-lo>.45?.2:.1;for(let v=lo;v<=hi+1e-9;v+=gs)g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="#EDF0F4"/><text x="${pl-6}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="#98A2B3">${Math.round(v*100)}%</text>`;
+ if(t!=null)g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(t)}" y2="${y(t)}" stroke="#1B8A4B" stroke-dasharray="5 4"/><text x="${W-pr}" y="${y(t)-5}" text-anchor="end" font-size="11" fill="#1B8A4B">Target ${pct(t)}</text>`;
+ for(const s of series){let d="",pen=false;s.vals.forEach((v,i)=>{if(v==null){pen=false;return}d+=(pen?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1);pen=true});
+  g+=`<path d="${d}" fill="none" stroke="${s.col}" stroke-width="2.5" stroke-linejoin="round"/>`;s.vals.forEach((v,i)=>{if(v!=null)g+=`<circle cx="${x(i)}" cy="${y(v)}" r="${days.length>20?2.4:3.4}" fill="#fff" stroke="${s.col}" stroke-width="2"/>`})}
+ const step=Math.ceil(days.length/(W<520?4:8));days.forEach((d,i)=>{const lastI=days.length-1;if((i%step===0&&lastI-i>=step*.6)||i===lastI)g+=`<text x="${x(i)}" y="${H-7}" text-anchor="${days.length>1&&i===0?"start":days.length>1&&i===lastI?"end":"middle"}" font-size="11" fill="#98A2B3">${esc(d.lab)}</text>`});
+ g+=`<rect x="${pl}" y="0" width="${W-pl-pr}" height="${H}" fill="transparent" class="hit"/>`;
+ el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend chart">${g}</svg>`;
+ const svg=el.querySelector("svg"),tip=el.parentNode.querySelector(".tip");
+ const pick=e=>{const bx=svg.getBoundingClientRect(),px=(e.clientX-bx.left)*W/bx.width;let bi=0,bd=1e9;days.forEach((d,i)=>{const dd=Math.abs(x(i)-px);if(dd<bd){bd=dd;bi=i}});
+  if(tip)tip.textContent=`${days[bi].full}: `+series.map(s=>`${s.name} ${s.vals[bi]==null?"–":pct(s.vals[bi])}${s.extra?s.extra(bi):""}`).join(" · ")};
+ svg.querySelector(".hit").addEventListener("pointerdown",pick);svg.querySelector(".hit").addEventListener("pointermove",e=>{if(e.pointerType==="mouse"||e.buttons)pick(e)})}
+function drawTrend(rows,a,b){if(b-a<1)a=Math.max(0,b-6);const by={};for(const r of D.facts){if(r[0]<a||r[0]>b||!pass(r))continue;(by[r[0]]??=[]).push(r)}
+ const days=[],cov=[],osa=[],sos=[];for(let d=a;d<=b;d++){const s=by[d]?agg(by[d]):null;days.push({lab:dLab(d),full:dLab(d,{weekday:"short",day:"numeric",month:"short"})});cov.push(s?s.cov:null);osa.push(s?s.osa:null);sos.push(s?s.sos:null)}
+ lineChart($("trend"),days,[{name:"Coverage",col:"var(--blue)",vals:cov},{name:"OSA",col:"var(--good)",vals:osa},{name:"SOS",col:"var(--violet)",vals:sos}],null)}
+
+// ---------------------------------------------------------------- MSR reports
+function viewMsrs(){const [a,b]=range();
+ let team=teamRows(D.facts.filter(r=>inR(r,a,b)&&pass(r,"msr"))).sort((x,y)=>x.name.localeCompare(y.name));
+ const q=S.q.trim().toLowerCase();if(q)team=team.filter(o=>o.name.toLowerCase().includes(q)||o.sup.toLowerCase().includes(q));
+ $("content").innerHTML=toolbar(false)+`<div class="card"><h2>MSR reports <small>${team.length} MSRs · ${dLab(a)} to ${dLab(b)}</small></h2>
+ <input class="search" id="q" type="search" placeholder="Search MSR or supervisor" value="${esc(S.q)}" aria-label="Search MSR"><div style="height:12px"></div>
+ ${teamTable(team.slice(0,S.msrLimit))}${team.length>S.msrLimit?`<button class="more" type="button" id="mm">Show all ${team.length}</button>`:""}</div>`;
+ $("q").oninput=e=>{S.q=e.target.value;const pos=e.target.selectionStart;render();const el=$("q");el.focus();el.setSelectionRange(pos,pos)};
+ if($("mm"))$("mm").onclick=()=>{S.msrLimit=1e9;render()};wireMsrLinks()}
+
+function viewMsr(){const id=S.msrView,[a,b]=range(),t=T();
+ if(id==null||id<0){if(isMsr()){$("content").innerHTML=`<div class="card"><h2>My report</h2><p class="empty">Your name (${esc(USER.name)}) was not found in the field data for this period. If you visited outlets recently, ask your supervisor or the trade marketing team to check that your name in the user master matches the field app.</p></div>`;return}go("msrs");return}
+ const rows=D.facts.filter(r=>r[4]===id&&inR(r,a,b)),s=agg(rows);
+ const sup=rows.length?tc(D.lists.supervisor[rows[0][3]]):"";const name=tc(D.lists.msr[id]);
+ const pr=D.promo.rows.filter(r=>r[3]===id),p=pAgg(pr);
+ // outlets
+ const og=new Map();for(const r of rows){(og.get(r[5])||og.set(r[5],[]).get(r[5])).push(r)}
+ const outs=[...og].map(([k,rs])=>({k,acc:tc(D.lists.account[rs[0][2]]),s:agg(rs)})).sort((x,y)=>y.s.miss-x.s.miss||(x.s.osa??2)-(y.s.osa??2));
+ // out of stock SKUs (last 7 days)
+ const sk=new Map();for(const r of D.sku){if(r[3]!==id)continue;const g=sk.get(r[4])||[0,0];g[0]+=r[5];g[1]+=r[6];sk.set(r[4],g)}
+ const oos=[...sk].filter(([,g])=>g[1]>g[0]).map(([k,g])=>({sku:tc(D.lists.sku[k]),oos:g[1]-g[0],n:g[1]})).sort((x,y)=>y.oos-x.oos).slice(0,10);
+ const yet=[...p.map.values()].filter(q=>!q.a).sort((x,y)=>D.lists.store[x.store].localeCompare(D.lists.store[y.store]));
+ const initials=name.split(" ").map(w=>w[0]).slice(0,2).join("");
+ $("content").innerHTML=toolbar(false)+`${isMsr()?"":`<button class="back" type="button" data-go="msrs">‹ All MSR reports</button>`}
+ <div class="card"><div class="hero"><div class="avatar">${esc(initials)}</div><div><h2>${esc(name)}</h2><p>${esc(sup)} · ${fi(og.size)} outlets · ${dLab(a)} to ${dLab(b)}</p></div></div></div>
+ <div class="grid4">${card({label:"Coverage",ic:["target","blue"],value:pct(s.cov),cls:rag(s.cov,t.cov),sub:`${fi(s.done)} / ${fi(s.plan)} visits · ${fi(s.adhoc)} ad hoc`,meter:s.cov,mcls:rag(s.cov,t.cov)})}
+ ${card({label:"Missed visits",ic:["alert","bad"],value:fi(s.miss),cls:s.miss?"bad":"good",sub:`${fi(s.ex)} on leave or off`})}
+ ${card({label:"On-shelf availability",ic:["shelf","blue"],value:pct(s.osa),cls:rag(s.osa,t.osa),sub:`${fi(s.osaA)} of ${fi(s.osaN)} SKU checks`,meter:s.osa,mcls:rag(s.osa,t.osa)})}
+ ${card({label:"Promo outlets",ic:["promo","bad"],value:p.outlets?`${fi(p.act)} / ${fi(p.outlets)}`:"–",cls:rag(p.rate,t.promo),sub:p.outlets?`${pct(p.rate)} activated · ${fi(p.run)} of ${fi(p.slots)} promo SKUs live`:"No promo outlets in the latest report",meter:p.rate,mcls:rag(p.rate,t.promo)})}</div>
+ <div class="card"><h2>Daily trend</h2><div class="legend"><span><i style="background:var(--blue)"></i>Coverage</span><span><i style="background:var(--good)"></i>OSA</span><span><i style="background:var(--violet)"></i>SOS</span></div><div class="chart" id="trend"></div><div class="tip"></div></div>
+ <div class="card"><h2>Outlets <small>most missed visits first</small></h2>${outs.length?`<div class="tbl"><table><thead><tr><th>Outlet</th><th>Planned</th><th>Done</th><th>Ad hoc</th><th>Missed</th><th>OSA</th></tr></thead><tbody>${outs.map(o=>`<tr><td><b>${esc(tc(D.lists.store[o.k]))}</b><small>${esc(o.acc)}</small></td><td>${fi(o.s.plan-o.s.adhoc)}</td><td>${fi(o.s.done)}</td><td>${fi(o.s.adhoc)}</td><td class="${o.s.miss?"bad":""}">${fi(o.s.miss)}</td><td><span class="pill p-${rag(o.s.osa,t.osa)}">${pct(o.s.osa)}</span></td></tr>`).join("")}</tbody></table></div>`:'<p class="empty">No visits in this period.</p>'}</div>
+ <div class="two"><div class="card"><h2>SKUs out of stock <small>last ${D.skuDays} days</small></h2>${oos.length?`<ul class="list">${oos.map(o=>`<li><span><b>${esc(o.sku)}</b><small>Out of stock ${fi(o.oos)} of ${fi(o.n)} checks</small></span><span class="pill p-bad">${pct(1-o.oos/o.n)}</span></li>`).join("")}</ul>`:'<p class="empty">No out-of-stock SKUs in the last week.</p>'}</div>
+ <div class="card"><h2>Promo outlets yet to activate</h2>${yet.length?`<ul class="list">${yet.map(q=>`<li><span><b>${esc(tc(D.lists.store[q.store]))}</b><small>${esc(tc(D.lists.account[q.acc]))} · ${q.run} of ${q.n} promo SKUs live</small></span><span class="badge ${q.v?"p-warn":"p-none"}">${q.v?"Yet to activate":"Not visited"}</span></li>`).join("")}</ul>`:`<p class="empty">${p.outlets?"Every promo outlet is activated.":"No promo outlets for this MSR."}</p>`}</div></div>`;
+ let ta=a,tb=b;if(tb-ta<6)ta=Math.max(0,tb-13);const by={};for(const r of D.facts){if(r[4]!==id||r[0]<ta||r[0]>tb)continue;(by[r[0]]??=[]).push(r)}
+ const days=[],cov=[],osa=[],sos=[];for(let d=ta;d<=tb;d++){const x=by[d]?agg(by[d]):null;days.push({lab:dLab(d),full:dLab(d,{weekday:"short",day:"numeric",month:"short"})});cov.push(x?x.cov:null);osa.push(x?x.osa:null);sos.push(x?x.sos:null)}
+ lineChart($("trend"),days,[{name:"Coverage",col:"var(--blue)",vals:cov},{name:"OSA",col:"var(--good)",vals:osa},{name:"SOS",col:"var(--violet)",vals:sos}],null)}
+
+// ---------------------------------------------------------------- promo progress
+function viewPromo(){const t=T(),rows=D.promo.rows.filter(r=>ppass(r)),p=pAgg(rows),info=D.promo.info||{};
+ const yetAll=[...p.map.values()].filter(q=>!q.a);const nv=yetAll.filter(q=>!q.v).length;
+ // progress across the daily reports (outlet activation)
+ const supName=S.supervisor!==""?D.lists.supervisor[+S.supervisor]:null,accName=S.account!==""?D.lists.account[+S.account]:null;
+ const hist=(D.promoHistory||[]).map(h=>{let n=0,x=0;for(const r of h.rows){if(supName&&r[0]!==supName)continue;if(accName&&r[1]!==accName)continue;n+=r[2];x+=r[3]}return{h,n,x,v:n?x/n:null}});
+ // by account, by SKU, by MSR
+ const grp=(idx,lst)=>{const g=new Map();for(const r of rows){(g.get(r[idx])||g.set(r[idx],[]).get(r[idx])).push(r)}return [...g].map(([k,rs])=>({k,name:tc(lst[k]),p:pAgg(rs)}))};
+ const accs=grp(1,D.lists.account).sort((x,y)=>(x.p.rate??2)-(y.p.rate??2));
+ const msrs=grp(3,D.lists.msr).sort((x,y)=>(x.p.rate??2)-(y.p.rate??2));
+ const sk=new Map();for(const r of rows){const g=sk.get(r[5])||{n:0,a:0};g.n++;if(r[6]===0)g.a++;sk.set(r[5],g)}
+ const skus=[...sk].map(([k,g])=>({name:tc(D.lists.sku[k]),n:g.n,a:g.a,v:g.a/g.n})).sort((x,y)=>x.v-y.v).slice(0,12);
+ const bar=v=>`<div class="prog"><span class="pill p-${rag(v,t.promo)}">${pct(v)}</span><div class="meter"><i class="bg-${rag(v,t.promo)}" style="width:${(v||0)*100}%"></i></div></div>`;
+ const first=hist.find(h=>h.v!=null),lastH=hist.length?hist[hist.length-1]:null;
+ const change=first&&lastH&&first!==lastH&&lastH.v!=null?(lastH.v-first.v)*100:null;
+ $("content").innerHTML=toolbar(false)+`<div class="bar"><div class="stamp">${ICON.promo}<span>${esc(info.file||"No promo report found")}${info.start?` · promo period ${dIso(info.start)} to ${dIso(info.end,{day:"numeric",month:"short",year:"numeric"})}`:""}</span></div></div>
+ <div class="grid4">${card({label:"Outlets activated",ic:["promo","bad"],value:pct(p.rate),cls:rag(p.rate,t.promo),sub:`${fi(p.act)} of ${fi(p.outlets)} outlets`,meter:p.rate,mcls:rag(p.rate,t.promo)})}
+ ${card({label:"Yet to activate",ic:["alert","orange"],value:fi(yetAll.length-nv),cls:yetAll.length-nv?"warn":"good",sub:"Visited, no promo running"})}
+ ${card({label:"Not visited",ic:["warn","bad"],value:fi(nv),cls:nv?"bad":"good",sub:"No visit in the promo period"})}
+ ${isMsr()?card({label:"Promo SKUs live",ic:["bars","violet"],value:`${fi(p.run)} / ${fi(p.slots)}`,sub:"Promo SKU slots running in your outlets"}):card({label:"Progress",ic:["bars","violet"],value:change==null?"–":(change>=0?"+":"")+change.toFixed(1)+" pts",cls:change==null?"":change>=0?"good":"bad",sub:first&&lastH&&first!==lastH?`Since ${dIso(first.h.date)} (${pct(first.v)} → ${pct(lastH.v)})`:"Needs two or more daily reports"})}</div>
+ ${isMsr()?"":`<div class="card"><h2>Activation progress <small>outlets activated in each daily compliance report</small></h2><div class="chart" id="ptrend"></div><div class="tip"></div></div>`}
+ <div class="two"><div class="card"><h2>By account <small>lowest first</small></h2>${accs.length?`<div class="tbl"><table><thead><tr><th>Account</th><th>Outlets</th><th>Activated</th></tr></thead><tbody>${accs.map(o=>`<tr class="go" data-acc="${o.k}"><td><b>${esc(o.name)}</b></td><td>${fi(o.p.act)} / ${fi(o.p.outlets)}</td><td>${bar(o.p.rate)}</td></tr>`).join("")}</tbody></table></div>`:'<p class="empty">No promo outlets for this selection.</p>'}</div>
+ ${isMsr()?"":`<div class="card"><h2>By MSR <small>lowest first</small></h2>${msrs.length?`<div class="tbl"><table><thead><tr><th>MSR</th><th>Outlets</th><th>Activated</th></tr></thead><tbody>${msrs.map(o=>`<tr class="go" data-msr="${o.k}"><td><b>${esc(o.name)}</b></td><td>${fi(o.p.act)} / ${fi(o.p.outlets)}</td><td>${bar(o.p.rate)}</td></tr>`).join("")}</tbody></table></div>`:'<p class="empty">No promo outlets for this selection.</p>'}</div>`}</div>
+ <div class="two"><div class="card"><h2>Promo SKUs least running <small>share of outlet slots live</small></h2>${skus.length?`<ul class="list">${skus.map(o=>`<li><span><b>${esc(o.name)}</b><small>Live in ${fi(o.a)} of ${fi(o.n)} outlets</small></span>${bar(o.v)}</li>`).join("")}</ul>`:'<p class="empty">No promo SKUs.</p>'}</div>
+ <div class="card"><h2>Outlets yet to activate <small>${fi(yetAll.length)} outlets</small></h2>${yetAll.length?`<ul class="list">${yetAll.slice(0,S.yetLimit).map(q=>`<li><span><b>${esc(tc(D.lists.store[q.store]))}</b><small>${esc(tc(D.lists.account[q.acc]))}${D.lists.msr[q.msr]&&D.lists.msr[q.msr]!=="UNASSIGNED"?` · ${esc(tc(D.lists.msr[q.msr]))}`:""} · ${q.run} of ${q.n} promo SKUs live</small></span><span class="badge ${q.v?"p-warn":"p-none"}">${q.v?"Yet to activate":"Not visited"}</span></li>`).join("")}</ul>${yetAll.length>S.yetLimit?`<button class="more" type="button" id="ym">Show all ${fi(yetAll.length)}</button>`:""}`:'<p class="empty">Every outlet in this selection is activated.</p>'}</div></div>`;
+ if($("ym"))$("ym").onclick=()=>{S.yetLimit=1e9;render()};
+ document.querySelectorAll("[data-acc]").forEach(tr=>tr.onclick=()=>{S.account=S.account===tr.dataset.acc?"":tr.dataset.acc;render()});wireMsrLinks();
+ const hh=hist.filter(h=>h.n);if(!$("ptrend"))return;if(hh.length)lineChart($("ptrend"),hh.map(h=>({lab:dIso(h.h.date),full:dIso(h.h.date,{weekday:"short",day:"numeric",month:"short"})})),[{name:"Outlets activated",col:"var(--red)",vals:hh.map(h=>h.v),extra:i=>` (${fi(hh[i].x)} of ${fi(hh[i].n)})`}],t.promo[0]);
+ else $("ptrend").innerHTML=`<p class="empty">${SYS==="ib"?"Promo execution is tracked for Core only.":"No daily compliance reports found yet."}</p>`}
+
+// ---------------------------------------------------------------- store checks
+function viewChecks(){const [a,b]=range(),rows=D.prop.rows.filter(r=>inR(r,a,b)&&pass(r));const PX={exc:6,asset:7,so:8,items:9,photo:10,list:11};
+ const u=k=>{const y=new Set(),n=new Set();for(const r of rows){if(r[PX[k]]>=0){n.add(r[5]);if(r[PX[k]]>0)y.add(r[5])}}return{y:y.size,n:n.size}};
+ const so=u("so"),as=u("asset"),ex=u("exc"),outlets=new Set(rows.map(r=>r[5])).size;
+ const hits=rows.filter(r=>r[8]>0||r[7]>0||r[6]>0).sort((x,y)=>y[0]-x[0]);
+ const what=r=>[r[8]>0?`<span class="badge p-bad">Stock out</span>`:"",r[7]>0?`<span class="badge p-good">Extra display</span>`:"",r[6]>0?`<span class="badge p-warn">Exceptional sale</span>`:""].join(" ");
+ const photo=r=>(String(r[PX.photo]||"").match(/https?:\/\/[^\s,;|]+/)||[])[0];
+ $("content").innerHTML=toolbar(true)+`<div class="grid4">${card({label:"Outlets checked",ic:["checks","blue"],value:fi(outlets),sub:`${fi(rows.length)} store checks`})}
+ ${card({label:"Stock outs",ic:["alert","bad"],value:fi(so.y),cls:so.y?"bad":"good",sub:`Outlets of ${fi(so.n)} answered`})}
+ ${card({label:"Extra displays",ic:["star","orange"],value:fi(as.y),cls:"good",sub:`Outlets of ${fi(as.n)} answered`})}
+ ${card({label:"Exceptional sales",ic:["bars","violet"],value:fi(ex.y),sub:`Outlets of ${fi(ex.n)} answered`})}</div>
+ <div class="card"><h2>What was reported <small>newest first</small></h2>${hits.length?`<ul class="list">${hits.slice(0,S.chkLimit).map(r=>{const ph=photo(r);return `<li><span><b>${esc(tc(D.lists.store[r[5]]))}</b><small>${esc(tc(D.lists.account[r[2]]))} · ${esc(tc(D.lists.msr[r[4]]))} · ${dLab(r[0],{weekday:"short",day:"numeric",month:"short"})}${r[8]>0&&r[PX.list]?`<br>Out of stock: ${esc(r[PX.list])}`:""}${r[6]>0&&r[PX.items]?`<br>Sale: ${esc(r[PX.items])}`:""}</small></span><span style="text-align:right">${what(r)}${ph?`<br><a href="${esc(ph)}" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:var(--side);font-weight:600">Display photo</a>`:""}</span></li>`}).join("")}</ul>${hits.length>S.chkLimit?`<button class="more" type="button" id="cm">Show all ${fi(hits.length)}</button>`:""}`:'<p class="empty">Nothing reported for this selection.</p>'}</div>`;
+ if($("cm"))$("cm").onclick=()=>{S.chkLimit=1e9;render()}}
+
+// ---------------------------------------------------------------- feedback
+const FB_TOPICS={MSR:["My outlets","Stock and orders","Promo execution","Displays and planogram","My numbers look wrong","The app"],
+ SUPERVISOR:["An MSR in my team","An outlet or account","Promo execution","Stock and orders","Numbers look wrong","Suggestion"],
+ MANAGER:["A supervisor or team","An account","Promo execution","Numbers look wrong","Suggestion"],ADMIN:["A supervisor or team","An account","Promo execution","Numbers look wrong","Suggestion"]};
+const FB_TYPES=["Insight from the field","Problem","Question","Suggestion"];
+let FB={rows:null,tab:"all",status:"",limit:30};
+function fbOptions(key,set,all){return `<option value="">${all}</option>`+[...set].sort((a,b)=>D.lists[key][a].localeCompare(D.lists[key][b])).map(i=>`<option value="${esc(D.lists[key][i])}">${esc(tc(D.lists[key][i]))}</option>`).join("")}
+function viewFeedback(){const role=(USER&&USER.role)||"MSR",topics=FB_TOPICS[role]||FB_TOPICS.MSR;
+ const outlets=new Set(),msrs=new Set(),sups=new Set(),accs=new Set();
+ for(const r of D.facts){outlets.add(r[5]);msrs.add(r[4]);sups.add(r[3]);accs.add(r[2])}for(const r of D.promo.rows){outlets.add(r[4]);accs.add(r[1])}
+ const fields=role==="MSR"?`<label class="fld">Outlet (optional)<select id="fbO">${fbOptions("store",outlets,"Not about one outlet")}</select></label>`
+  :role==="SUPERVISOR"?`<label class="fld">MSR (optional)<select id="fbP">${fbOptions("msr",msrs,"Not about one MSR")}</select></label><label class="fld">Outlet (optional)<select id="fbO">${fbOptions("store",outlets,"Not about one outlet")}</select></label>`
+  :`<label class="fld">Supervisor (optional)<select id="fbS2">${fbOptions("supervisor",sups,"Not about one team")}</select></label><label class="fld">Account (optional)<select id="fbA">${fbOptions("account",accs,"Not about one account")}</select></label>`;
+ const tabs=[["all",role==="MSR"?"My feedback":"All I can see"],...(role==="MSR"?[]:[["mine","Sent by me"]]),...(role==="SUPERVISOR"?[["team","From my team"]]:[])];
+ $("content").innerHTML=`<div class="card"><h2>Send feedback <small>sent as ${esc(USER?USER.name:"")} · ${esc((USER&&USER.id)||"")}</small></h2><form id="fbf">
+ <div class="two"><label class="fld">About<select id="fbK">${topics.map(k=>`<option>${esc(k)}</option>`).join("")}</select></label><label class="fld">Type<select id="fbT">${FB_TYPES.map(k=>`<option>${k}</option>`).join("")}</select></label></div>
+ <div class="two">${fields}</div>
+ <label class="fld">Your feedback<textarea id="fbM" maxlength="2000" required placeholder="${role==="MSR"?"For example: Naivas Kisumu has not received the Velvex order since Monday.":role==="SUPERVISOR"?"For example: Ruth missed 3 visits this week because of a wrong call cycle; please correct it.":"For example: Quickmart promo activation is behind in Nairobi."}"></textarea></label>
+ <button class="bigbtn" id="fbS" style="max-width:260px">Send feedback</button></form></div>
+ <div class="card"><h2>Feedback <button class="back" type="button" id="fbR">Refresh</button></h2>
+ <div class="chips" style="margin-bottom:8px">${tabs.map(([k,l])=>`<button class="chip" type="button" data-fbt="${k}" aria-pressed="${FB.tab===k}">${l}</button>`).join("")}</div>
+ <div class="chips" style="margin-bottom:6px">${[["","Any status"],["New","New"],["In progress","In progress"],["Resolved","Resolved"],["Not an issue","Not an issue"]].map(([k,l])=>`<button class="chip" type="button" data-fbs="${k}" aria-pressed="${FB.status===k}">${l}</button>`).join("")}</div>
+ <div id="fbList"><p class="empty">Loading…</p></div></div>`;
+ $("fbf").onsubmit=e=>{e.preventDefault();const m=$("fbM").value.trim();if(m.length<5){toast("Write a little more so the team can act on it.");return}const b=$("fbS");b.disabled=true;b.textContent="Sending…";
+  const v=id=>$(id)?$(id).value:"";
+  call("submitFeedback",TOKEN,{kpi:$("fbK").value,type:$("fbT").value,message:m,system:SYS.toUpperCase(),tab:"portal",outlet:v("fbO"),msr:v("fbP"),
+   filters:[v("fbS2")&&"supervisor="+v("fbS2"),v("fbA")&&"account="+v("fbA")].filter(Boolean).join("; "),dataVersion:D.generated,period:S.period,project:SYS.toUpperCase()})
+  .then(r=>{b.disabled=false;b.textContent="Send feedback";if(r&&r.ok){$("fbM").value="";toast(`Feedback sent (${r.id}). Thank you.`);loadFb()}else toast(r&&r.error||"Could not send. Try again.")})
+  .catch(()=>{b.disabled=false;b.textContent="Send feedback";toast("Could not send. Check your connection.")})};
+ document.querySelectorAll("[data-fbt]").forEach(x=>x.onclick=()=>{FB.tab=x.dataset.fbt;FB.limit=30;viewFeedbackList();document.querySelectorAll("[data-fbt]").forEach(y=>y.setAttribute("aria-pressed",y===x))});
+ document.querySelectorAll("[data-fbs]").forEach(x=>x.onclick=()=>{FB.status=x.dataset.fbs;FB.limit=30;viewFeedbackList();document.querySelectorAll("[data-fbs]").forEach(y=>y.setAttribute("aria-pressed",y===x))});
+ $("fbR").onclick=loadFb;if(FB.rows)viewFeedbackList();loadFb()}
+function loadFb(){call("getFeedback",TOKEN).then(r=>{if(!r||r.error){if($("fbList"))$("fbList").innerHTML=`<p class="empty">${esc(r&&r.error||"Could not load feedback.")}</p>`;return}FB.rows=r.rows;FB.statuses=r.statuses;if(S.view==="feedback")viewFeedbackList()})
+ .catch(()=>{if($("fbList"))$("fbList").innerHTML='<p class="empty">Could not load feedback. Check your connection.</p>'})}
+const stBadge=s=>({New:"p-bad","In progress":"p-warn",Resolved:"p-good","Not an issue":"p-none"}[s]||"p-none");
+function viewFeedbackList(){const el=$("fbList");if(!el||!FB.rows)return;
+ let rows=FB.rows.filter(f=>FB.tab==="mine"?f.mine:FB.tab==="team"?!f.mine:true).filter(f=>!FB.status||f.status===FB.status);
+ el.innerHTML=rows.length?`<ul class="list">${rows.slice(0,FB.limit).map(f=>`<li style="display:block"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><span><b>${esc(f.kpi)} · ${esc(f.type)}</b>
+  <small>${esc(f.mine?"You":f.name)}${f.mine?"":` (${esc({MSR:"MSR",SUPERVISOR:"Supervisor",MANAGER:"Manager",ADMIN:"Admin"}[f.role]||tc(f.role))}${f.supervisor&&f.role==="MSR"?`, ${esc(tc(f.supervisor))}'s team`:""})`} · ${esc(f.when)} · ${esc(f.fid)}${f.msr?` · MSR ${esc(tc(f.msr))}`:""}${f.outlet?` · ${esc(tc(f.outlet))}`:""}</small></span><span class="badge ${stBadge(f.status)}">${esc(f.status)}</span></div>
+  <p style="margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(f.message)}</p>
+  ${f.response?`<p style="margin:8px 0 0;padding:8px 10px;background:#F2F4F8;border-radius:10px;font-size:14px"><b style="display:inline">${esc(f.owner)}:</b> ${esc(f.response)} <small>${esc(f.respondedOn)}</small></p>`:""}
+  ${f.canAnswer?`<form class="ans" data-fid="${esc(f.fid)}" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><select class="sel" aria-label="Status">${(FB.statuses||["New","In progress","Resolved","Not an issue"]).map(s=>`<option${s===f.status?" selected":""}>${s}</option>`).join("")}</select>
+   <input class="search" style="flex:1;min-width:180px;max-width:none" placeholder="Reply to ${esc(f.name.split(" ")[0])}" value="${esc(f.response)}" aria-label="Reply"><button class="chip" type="submit" aria-pressed="true">Save</button></form>`:""}</li>`).join("")}</ul>
+  ${rows.length>FB.limit?`<button class="more" type="button" id="fbMore">Show all ${rows.length}</button>`:""}`
+  :`<p class="empty">${FB.tab==="team"?"No feedback from your team yet.":"No feedback here yet."}</p>`;
+ if($("fbMore"))$("fbMore").onclick=()=>{FB.limit=1e9;viewFeedbackList()};
+ el.querySelectorAll("form.ans").forEach(f=>f.onsubmit=e=>{e.preventDefault();const btn=f.querySelector("button");btn.disabled=true;
+  call("respondFeedback",TOKEN,f.dataset.fid,f.querySelector("select").value,f.querySelector("input").value).then(r=>{btn.disabled=false;if(r&&r.ok){toast("Saved");loadFb()}else toast(r&&r.error||"Could not save.")}).catch(()=>{btn.disabled=false;toast("Could not save. Check your connection.")})})}
+
+let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D&&(S.view==="dash"||S.view==="msr"||S.view==="promo"))render()},250)});
+</script></body></html>

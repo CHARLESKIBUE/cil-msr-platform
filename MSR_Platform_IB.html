@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
+   Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
+(function(){
+var SITE={feedbackUrl:"",version:"202610220055"};
+var enc=new TextEncoder(),dec=new TextDecoder();
+function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
+function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
+async function sha(t){return hex(await crypto.subtle.digest("SHA-256",enc.encode(t)))}
+async function aes(raw,iv,ct){var k=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);return new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv:iv},k,ct))}
+async function gunzip(u8){var s=new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"));return new Uint8Array(await new Response(s).arrayBuffer())}
+var BAD={error:"That login ID and PIN do not match. Check them or ask your supervisor."};
+async function login(id,pin){
+  id=String(id||"").trim().toUpperCase();pin=String(pin||"").trim();
+  var r=await fetch("k/"+(await sha("cil|"+id))+".json?v="+SITE.version,{cache:"no-store"});
+  if(!r.ok)return BAD;
+  var j=await r.json();
+  var base=await crypto.subtle.importKey("raw",enc.encode(pin),"PBKDF2",false,["deriveBits"]);
+  var bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:b64d(j.salt),iterations:j.iter},base,256);
+  try{var b=JSON.parse(dec.decode(await aes(bits,b64d(j.iv),b64d(j.ct))))}catch(e){return BAD}
+  b.exp=Date.now()+30*864e5;
+  post("logEvent","L1",b.user,["sign-in",""]).catch(function(){});
+  return {token:"L1."+btoa(unescape(encodeURIComponent(JSON.stringify(b)))),user:b.user};
+}
+function tok(t){try{if(!t||t.indexOf("L1.")!==0)return null;var b=JSON.parse(decodeURIComponent(escape(atob(t.slice(3)))));return b.exp>Date.now()?b:null}catch(e){return null}}
+async function data(t,sys){
+  var b=tok(t);if(!b)return null;sys=String(sys)==="ib"?"ib":"core";
+  var e=b.keys[sys];if(!e)throw new Error("There is no "+sys.toUpperCase()+" data for this login.");
+  var r=await fetch("data/"+e.f+".bin?v="+SITE.version,{cache:"no-store"});
+  if(!r.ok)throw new Error("The data has not been published yet. Try again in a few minutes.");
+  var buf=new Uint8Array(await r.arrayBuffer());
+  post("logEvent","L1",b.user,["open",sys.toUpperCase()]).catch(function(){});
+  return dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
+}
+async function post(fn,t,user,args){
+  if(!SITE.feedbackUrl||SITE.feedbackUrl.indexOf("http")!==0)return {error:"Feedback is not connected yet."};
+  var r=await fetch(SITE.feedbackUrl,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify({fn:fn,user:user,proof:user&&user.fb,args:args})});
+  return r.json();
+}
+function viaPost(fn){return function(t){var b=tok(t);return post(fn,t,b&&b.user,Array.prototype.slice.call(arguments,1))}}
+var H={login:login,resume:async function(t){var b=tok(t);return b?b.user:null},getData:data,getPortalData:data,
+  logEvent:function(t){var b=tok(t);return post("logEvent",t,b&&b.user,Array.prototype.slice.call(arguments,1)).catch(function(){return true})},
+  submitFeedback:viaPost("submitFeedback"),getFeedback:viaPost("getFeedback"),respondFeedback:viaPost("respondFeedback")};
+function runner(ok,fail){return new Proxy({},{get:function(_,p){
+  if(p==="withSuccessHandler")return function(f){return runner(f,fail)};
+  if(p==="withFailureHandler")return function(f){return runner(ok,f)};
+  return function(){var a=arguments;Promise.resolve().then(function(){if(!H[p])throw new Error("Not available: "+p);return H[p].apply(null,a)})
+    .then(function(v){ok&&ok(v)}).catch(function(e){fail&&fail(e)})}}})}
+window.google={script:{run:runner(null,null)}};
+})();
+</script><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E5A57">
+<title>CIL MSR Performance</title>
+<style>
+:root{--paper:#F1F4F3;--panel:#FFFFFF;--ink:#16303F;--muted:#5B6B75;--line:#DAE1DF;--brand:#0E5A57;--brandink:#FFFFFF;
+--good:#1B7449;--warn:#9A6408;--bad:#B0342A;--goodbg:#E1F1E8;--warnbg:#FAEFD6;--badbg:#F8E1DE;--track:#E4EAE8;--scrim:rgba(10,25,32,.45);
+--c3:#2F6FB3;--font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--paper:#0E181D;--panel:#16232A;--ink:#E3EBEE;--muted:#98A8B1;--line:#2A3A43;--brand:#5DBDB4;--brandink:#0E181D;
+--good:#62C592;--warn:#E6B24E;--bad:#F07E72;--goodbg:#16331F;--warnbg:#382B11;--badbg:#3B1E1B;--track:#24343C;--scrim:rgba(0,0,0,.6);--c3:#7FB0E6}}
+:root[data-theme="dark"]{color-scheme:dark;--paper:#0E181D;--panel:#16232A;--ink:#E3EBEE;--muted:#98A8B1;--line:#2A3A43;--brand:#5DBDB4;--brandink:#0E181D;
+--good:#62C592;--warn:#E6B24E;--bad:#F07E72;--goodbg:#16331F;--warnbg:#382B11;--badbg:#3B1E1B;--track:#24343C;--scrim:rgba(0,0,0,.6);--c3:#7FB0E6}
+*{box-sizing:border-box}html,body{margin:0}[hidden]{display:none!important}
+body{background:var(--paper);color:var(--ink);font:15px/1.45 var(--font);font-variant-numeric:tabular-nums;-webkit-text-size-adjust:100%}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 12px 8px 16px;background:var(--brand);color:var(--brandink)}
+.bar h1{margin:0;font-size:17px;line-height:1.2;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar p{margin:1px 0 0;font-size:12px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .grow{flex:1;min-width:0}
+.hbtn{flex:0 0 auto;min-height:40px;padding:0 12px;border-radius:20px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.hbtn .n{background:var(--brandink);color:var(--brand);border-radius:10px;min-width:20px;height:20px;font-size:12px;display:inline-grid;place-items:center;padding:0 5px}
+.nav{display:flex;border-bottom:1px solid var(--line)}
+.nav button{flex:1;min-height:44px;border:0;background:none;cursor:pointer;font-weight:600;font-size:14px;color:var(--muted);border-bottom:3px solid transparent;padding:0 4px}
+@media (max-width:420px){.nav button{font-size:12.5px;padding:0 2px}}
+.list .r a{display:inline-block;padding:6px 0;text-decoration:none}
+#xkpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.thumbs a{display:flex;flex-direction:column;gap:3px;width:96px;text-decoration:none;color:var(--muted);font-size:11px}
+.thumbs img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:var(--track)}
+.thumbs a.noimg img{display:none}
+.thumbs a.noimg::before{content:"Open photo";display:grid;place-items:center;width:96px;height:96px;border-radius:8px;border:1px dashed var(--line);color:var(--brand);font-weight:600;font-size:12px}
+.list li.tall{align-items:flex-start}
+.focusbar{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;color:var(--muted);padding:0 4px}
+.focusbar b{color:var(--ink)}
+.row2.one{grid-template-columns:minmax(0,1fr)!important}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:-4px 0 6px}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+tr.tot td{font-weight:700;background:var(--paper)}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+@media (max-width:420px){.gal{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
+.gal figure{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);min-width:0}
+.gal a.ph{display:block;aspect-ratio:1/1;background:var(--track);position:relative}
+.gal a.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.gal a.ph.noimg img{display:none}
+.gal a.ph.noimg::before{content:"Open photo";position:absolute;inset:0;display:grid;place-items:center;color:var(--brand);font-weight:600;font-size:13px}
+.gal figcaption{padding:6px 8px 8px;font-size:12px;color:var(--muted);line-height:1.3}
+.gal figcaption b{display:block;color:var(--ink);font-size:13px;overflow-wrap:anywhere}
+details.promo{border-bottom:1px solid var(--line)}details.promo:last-child{border-bottom:0}
+details.promo summary{list-style:none;cursor:pointer;padding:12px 0;display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+details.promo summary::-webkit-details-marker{display:none}
+details.promo summary .t{min-width:0}details.promo summary b{display:block;overflow-wrap:anywhere}
+details.promo summary small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+details.promo summary .r{text-align:right;flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:12px;color:var(--muted)}
+details.promo[open] summary .chev{transform:rotate(90deg)}.chev{display:inline-block;transition:transform .15s}
+.lines{margin:0 0 12px;padding:10px 12px;background:var(--paper);border-radius:10px;font-size:13px}
+.lines div{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}.lines div:last-child{border-bottom:0}
+.lines span:last-child{text-align:right;color:var(--muted);flex:0 0 auto;max-width:45%}
+.nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--brand)}
+.strip{display:flex;gap:8px;overflow-x:auto;padding:8px 16px;scrollbar-width:none}
+.strip::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;min-height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-size:14px;white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.chip.active{background:var(--goodbg);border-color:transparent;font-weight:600}
+.chips{padding-top:0}.chips:empty{display:none}
+main{max-width:1100px;margin:0 auto;padding:12px 12px calc(28px + env(safe-area-inset-bottom))}
+.tab{display:grid;gap:12px}
+.scopebar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 4px}
+.scope{font-size:13px;color:var(--muted);min-width:0}
+.sharebtn{flex:0 0 auto;min-height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-size:13px;font-weight:600;color:var(--brand)}
+.kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:860px){.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}main{padding:18px 20px 40px}.tab{gap:16px}}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:left;display:block;width:100%}
+button.kpi{cursor:pointer}
+.kpi[aria-pressed="true"]{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.kpi h2{margin:0;font-size:13px;font-weight:600;color:var(--muted);line-height:1.25}
+.kpi .v{font-size:32px;font-weight:750;line-height:1;margin:6px 0 0;letter-spacing:-.5px}
+@media (min-width:860px){.kpi .v{font-size:40px}}
+.gauge{position:relative;height:7px;background:var(--track);border-radius:4px;margin:10px 0 7px}
+.gauge i{position:absolute;inset:0 auto 0 0;border-radius:4px}
+.gauge b{position:absolute;top:-4px;width:2px;height:15px;background:var(--ink);opacity:.5}
+.kpi .sub,.kpi .delta,.note{display:none!important}
+.kpi .delta{font-size:12px;font-weight:600;margin-top:4px}
+.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.f-good{background:var(--good)}.f-warn{background:var(--warn)}.f-bad{background:var(--bad)}.f-{background:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.panel h3{margin:0 0 10px;font-size:17px;line-height:1.25}
+.row2{display:grid;gap:12px}
+@media (min-width:860px){.row2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}}
+#trend svg{width:100%;height:auto;display:block;touch-action:pan-y}
+.tip{font-size:13px;color:var(--muted);min-height:19px;margin-top:4px}
+.tabs{margin:0 -14px 8px;padding:0 14px}
+.tools{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.tools label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.tools select{min-height:36px;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:0 8px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;white-space:normal}
+th{font-size:12px;color:var(--muted);font-weight:600}
+th button{background:none;border:0;padding:0;cursor:pointer;font-weight:600}
+.pill{display:inline-block;min-width:54px;text-align:center;border-radius:6px;padding:2px 6px;font-weight:700}
+.pill.good{background:var(--goodbg)}.pill.warn{background:var(--warnbg)}.pill.bad{background:var(--badbg)}
+td small{display:block;color:var(--muted);font-size:12px;font-weight:400}
+tr.go{cursor:pointer}tr.go:hover td{background:var(--paper)}tr.sel td{background:var(--goodbg)}
+@media (max-width:699px){
+ .cards thead{display:none}
+ .cards tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 8px;padding:12px 2px;border-bottom:1px solid var(--line)}
+ .cards td{border:0;padding:0;text-align:left;display:flex;flex-direction:column;gap:2px;font-size:13px}
+ .cards td:first-child{grid-column:1/-1;font-size:15px;font-weight:600;flex-direction:row;justify-content:space-between;align-items:baseline;gap:8px}
+ .cards td:first-child small{font-weight:400}
+ .cards td:not(:first-child)::before{content:attr(data-l);font-size:11px;color:var(--muted)}
+ .cards .pill{min-width:0;align-self:flex-start;font-size:15px}
+ .cards tr.go td:first-child::after{content:"›";color:var(--muted);font-size:20px;line-height:1;margin-left:auto}
+}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.list li:last-child{border-bottom:0}
+.list .t{min-width:0}.list .t b{display:block;font-weight:600;overflow-wrap:anywhere}.list .t small{color:var(--muted);font-size:12px}
+.list .r{text-align:right;flex:0 0 auto;font-size:13px;color:var(--muted)}
+.badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;white-space:nowrap}
+.b-good{background:var(--goodbg);color:var(--good)}.b-warn{background:var(--warnbg);color:var(--warn)}.b-bad{background:var(--badbg);color:var(--bad)}.b-mut{background:var(--track);color:var(--muted)}
+.more,.btn{width:100%;min-height:44px;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer;font-weight:600}
+.btn.primary{background:var(--brand);color:var(--brandink);border-color:var(--brand)}
+.btn:disabled{opacity:.6;cursor:default}
+.linkbtn{background:none;border:0;padding:0;color:var(--brand);font-weight:600;cursor:pointer;font-size:13px}
+.empty{color:var(--muted);padding:14px 0;text-align:center}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0}
+.form label{display:block;font-size:13px;color:var(--muted);margin-bottom:12px}
+.form select,.form input,.form textarea{display:block;width:100%;margin-top:4px;min-height:46px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:10px;font-size:16px}
+.form textarea{min-height:120px;resize:vertical}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:479px){.form .two{grid-template-columns:1fr;gap:0}}
+.fb{border-bottom:1px solid var(--line);padding:10px 0}.fb:last-child{border-bottom:0}
+.fb p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}.fb small{color:var(--muted);font-size:12px}
+footer{max-width:1100px;margin:0 auto;padding:0 16px calc(24px + env(safe-area-inset-bottom));font-size:12px;color:var(--muted)}
+#scrim{position:fixed;inset:0;background:var(--scrim);z-index:9;opacity:0;pointer-events:none;transition:opacity .2s}
+#scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--panel);border-radius:16px 16px 0 0;max-height:88vh;overflow:auto;
+padding:8px 16px calc(16px + env(safe-area-inset-bottom));transform:translateY(105%);transition:transform .22s ease-out;visibility:hidden}
+.sheet.on{transform:none;visibility:visible}
+@media (min-width:700px){.sheet{left:auto;top:0;width:380px;max-height:none;border-radius:0;transform:translateX(105%);padding-top:calc(16px + env(safe-area-inset-top))}}
+@media (prefers-reduced-motion:reduce){.sheet,#scrim{transition:none}}
+.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:4px auto 10px}
+@media (min-width:700px){.grab{display:none}}
+.sheet h2{margin:0 0 12px;font-size:18px}
+.sheet label{display:block;font-size:13px;color:var(--muted);margin-bottom:12px}
+.sheet select{display:block;width:100%;margin-top:4px;min-height:46px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:0 10px;font-size:16px}
+.acts{display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-top:6px;position:sticky;bottom:0;background:var(--panel);padding-top:8px}
+.acts button{min-height:48px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600}
+.acts .primary{background:var(--brand);color:var(--brandink);border-color:var(--brand)}
+#gate{position:fixed;inset:0;z-index:20;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:24px}
+#gate .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;width:100%;max-width:380px}
+#gate h1{margin:0 0 4px;font-size:22px}#gate p{margin:0 0 18px;color:var(--muted);font-size:14px}
+#gate .err{color:var(--bad);font-size:14px;min-height:20px;margin:6px 0 0}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--panel);
+padding:10px 16px;border-radius:20px;font-size:14px;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
+#toast.on{opacity:1}
+</style></head><body>
+<script id="payload" type="application/json"></script>
+<div id="gate" hidden><div class="card" id="gateCard"></div></div>
+<div class="top" id="topbar" hidden>
+ <div class="bar"><div class="grow"><h1 id="ttl">CIL field performance</h1><p id="stamp"></p></div>
+  <a class="hbtn" id="swap" href="#"></a>
+  <button class="hbtn" id="openF" type="button" aria-controls="sheet" aria-expanded="false">Filters <span class="n" id="fn" hidden></span></button></div>
+ <div class="nav" role="tablist" id="nav">
+  <button role="tab" data-t="overview" aria-selected="true">Overview</button>
+  <button role="tab" data-t="promos" aria-selected="false">Promos</button>
+  <button role="tab" data-t="running" aria-selected="false">Running</button>
+  <button role="tab" data-t="prop" aria-selected="false">Proposition</button>
+  <button role="tab" data-t="feedback" aria-selected="false">Feedback</button>
+ </div>
+ <nav class="strip" id="presets" aria-label="Date range"></nav>
+ <div class="strip chips" id="chips" aria-label="Active filters"></div>
+</div>
+<main id="main" hidden>
+ <div class="tab" id="t-overview">
+  <div class="scopebar"><div class="scope" id="scope"></div><button class="sharebtn share" type="button">Share this view</button></div>
+  <div class="kpis" id="kpis"></div>
+  <div class="focusbar" id="focus"></div>
+  <section class="panel"><h3 id="trendTitle">Daily trend</h3><div class="legend" id="legend"></div><div id="trend"></div><div class="tip" id="tip" aria-live="polite"></div></section>
+  <section class="panel"><h3 id="boardTitle">Team scorecard</h3>
+   <div class="strip tabs" id="groupTabs" role="group" aria-label="Group by"></div>
+   <div class="tools"><label>Sort <select id="sortSel"></select></label></div>
+   <div id="board" class="cards"></div><p class="note" id="boardNote"></p></section>
+  <div class="row2" id="ovRow">
+   <section class="panel" id="oosPanel"><h3>SKUs most often out of stock</h3><div id="oos"></div><p class="note" id="oosNote"></p></section>
+   <section class="panel" id="actPanel"><h3>Outlets yet to activate promos</h3><div id="ovActs"></div><p class="note" id="ovActNote"></p></section>
+  </div>
+  <section class="panel" id="covSupPanel" hidden><h3>Coverage by supervisor</h3><div id="covSup" class="cards"></div><p class="note" id="covSupNote"></p></section>
+ </div>
+ <div class="tab" id="t-promos" hidden>
+  <div class="scopebar"><div class="scope" id="pscope"></div><button class="sharebtn share" type="button">Share this view</button></div>
+  <div class="kpis" id="pkpis"></div>
+  <section class="panel"><h3>Promo activation</h3>
+   <div class="strip tabs" id="pTabs" role="group" aria-label="Show by"></div>
+   <div id="pboard" class="cards"></div><p class="note" id="pNote"></p></section>
+  <section class="panel"><h3 id="pListTitle">Outlets to follow up</h3>
+   <div class="strip tabs" id="pListTabs" role="group" aria-label="Outlet status"></div>
+   <div id="pList"></div><p class="note" id="pListNote"></p></section>
+ </div>
+ <div class="tab" id="t-running" hidden>
+  <div class="scopebar"><div class="scope" id="rscope"></div></div>
+  <section class="panel"><h3>Promos running and their dates</h3>
+   <div class="strip tabs" id="rTabs" role="group" aria-label="Promo status"></div>
+   <div id="rList"></div><p class="note" id="rNote"></p></section>
+ </div>
+ <div class="tab" id="t-prop" hidden>
+  <div class="scopebar"><div class="scope" id="xscope"></div><button class="sharebtn share" type="button">Share this view</button></div>
+  <div class="strip tabs" id="xView" role="group" aria-label="Proposition view" style="margin:0;padding:0 4px"></div>
+  <div class="tab" id="xXD" hidden>
+  <div class="kpis" id="xdkpis"></div>
+  <section class="panel"><h3>Extra displays by account</h3><div id="xdBoard" class="cards"></div><p class="note" id="xdNote"></p></section>
+  <section class="panel"><h3 id="xdGalTitle">Extra display gallery</h3>
+   <div class="strip tabs" id="xdTabs" role="group" aria-label="Photos to show"></div>
+   <div id="xdGal"></div><p class="note" id="xdGalNote"></p></section>
+  </div>
+  <div class="tab" id="xSum">
+  <div class="kpis" id="xkpis"></div>
+  <section class="panel"><h3>Store checks by team</h3>
+   <div class="strip tabs" id="xTabs" role="group" aria-label="Group by"></div>
+   <div id="xboard" class="cards"></div><p class="note" id="xNote"></p></section>
+  <section class="panel"><h3 id="xListTitle">What was reported</h3>
+   <div class="strip tabs" id="xListTabs" role="group" aria-label="Report type"></div>
+   <div id="xList"></div><p class="note" id="xListNote"></p></section>
+  </div>
+ </div>
+ <div class="tab" id="t-feedback" hidden>
+  <section class="panel form" id="fbForm"></section>
+  <section class="panel" id="fbAdmin" hidden><h3>Feedback received</h3><div class="tools"><button class="linkbtn" type="button" id="fbReload">Refresh</button></div><div id="fbList"></div></section>
+ </div>
+</main>
+<footer id="foot" hidden></footer>
+<div id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetT">
+ <div class="grab"></div><h2 id="sheetT">Filters</h2>
+ <div class="two" id="dateSel"><label>From<select id="fFrom"></select></label><label>To<select id="fTo"></select></label></div>
+ <label>Region<select id="fRegion"></select></label>
+ <label>Account<select id="fAccount"></select></label>
+ <label>Supervisor<select id="fSupervisor"></select></label>
+ <label>MSR<select id="fMsr"></select></label>
+ <div class="acts"><button type="button" id="reset">Clear all</button><button type="button" class="primary" id="closeF">Show results</button></div>
+</div>
+<div id="toast" role="status"></div>
+<script>
+const INIT={"system": "ib", "open": false};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("on");clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove("on"),2600)}
+const WEB=!!(INIT&&window.google&&google.script&&google.script.run);
+function call(fn,...a){return new Promise((res,rej)=>{google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...a)})}
+const store={get(){try{return localStorage.getItem("msrp_token")}catch(e){return null}},set(v){try{v?localStorage.setItem("msrp_token",v):localStorage.removeItem("msrp_token")}catch(e){}}};
+let TOKEN=null,USER=null;
+function track(ev,detail){if(WEB&&TOKEN)call("logEvent",TOKEN,ev,detail||"").catch(()=>{})}
+
+// ---------------- sign in (web link only)
+function gate(html){$("gate").hidden=false;$("gateCard").innerHTML=html}
+function showLogin(msg){gate(`<h1>CIL field performance</h1><p>Sign in with your login ID and PIN.</p>
+ <form id="lf" class="form" autocomplete="on"><label>Login ID<input id="lid" autocomplete="username" autocapitalize="characters" required></label>
+ <label>PIN<input id="lpin" type="password" inputmode="numeric" autocomplete="current-password" required></label>
+ <button class="btn primary" id="lbtn">Sign in</button><div class="err" id="lerr" role="alert">${esc(msg||"")}</div></form>
+ <p class="note">No login ID yet? Ask your supervisor or the trade marketing team.</p>`);
+ $("lid").focus();
+ $("lf").onsubmit=e=>{e.preventDefault();const b=$("lbtn");b.disabled=true;b.textContent="Signing in…";$("lerr").textContent="";
+  call("login",$("lid").value.trim(),$("lpin").value.trim()).then(r=>{
+   if(!r||r.error){b.disabled=false;b.textContent="Sign in";$("lerr").textContent=r&&r.error||"Sign-in failed. Try again.";return}
+   TOKEN=r.token;USER=r.user;store.set(TOKEN);load()}).catch(err=>{b.disabled=false;b.textContent="Sign in";$("lerr").textContent="Could not reach the server. Check your connection and try again."})}}
+function load(){gate(`<h1>Loading…</h1><p>Getting the latest numbers.</p>`);
+ call("getData",TOKEN,INIT.system).then(j=>{if(!j){showLogin("Your session has ended. Sign in again.");return}boot(JSON.parse(j))})
+ .catch(e=>gate(`<h1>Could not load the data</h1><p>${esc(e&&e.message||"Unknown error")}</p><button class="btn" onclick="load()">Try again</button>`))}
+function signOut(){store.set(null);TOKEN=null;USER=null;location.reload()}
+
+(function start(){
+ const raw=$("payload").textContent.trim();
+ if(raw.startsWith("{")){boot(JSON.parse(raw));return}
+ if(!WEB){gate(`<h1>No data in this file</h1><p>Run msr_platform.py to rebuild the page.</p>`);return}
+ TOKEN=store.get();
+ if(!TOKEN){showLogin();return}
+ gate(`<h1>Signing in…</h1>`);
+ call("resume",TOKEN).then(u=>{if(u){USER=u;load()}else{store.set(null);showLogin()}}).catch(()=>showLogin())})();
+
+// ---------------- the platform
+function boot(D){
+$("gate").hidden=true;["topbar","main","foot"].forEach(id=>$(id).hidden=false);
+const L=D.lists, F=D.facts, P=D.promo||{rows:[],statuses:[],info:{}}, PR=P.rows, last=L.date.length-1;
+const DIMS=["region","account","supervisor","msr"], DIM={date:0,region:1,account:2,supervisor:3,msr:4,store:5};
+const M={osaA:6,osaN:7,sosS:8,sosN:9,plan:10,done:11,adhoc:12,exempt:13}, NM=14;
+const PD={region:0,account:1,supervisor:2,msr:3,store:4,sku:5}, PST=6, POA=7; // promo row positions; status 0 Activated 1 Inconsistent 2 Not activated 3 Not checked 4 Not visited
+const fi=n=>Math.round(n).toLocaleString();
+const pct=v=>v==null?"–":(Math.round(v*1000)/10).toFixed(v>=.995||v<.1?0:1).replace(/\.0$/,"")+"%";
+const rag=(v,t)=>v==null?"":v>=t[0]?"good":v>=t[1]?"warn":"bad";
+const tc=s=>String(s).toLowerCase().replace(/(^|[\s(\-\/])(\w)/g,(a,b,c)=>b+c.toUpperCase());
+const dt=(i,o={day:"numeric",month:"short"})=>new Date(L.date[i]+"T00:00").toLocaleDateString(undefined,o);
+const dIso=(s,o={day:"numeric",month:"short"})=>s?new Date(s+"T00:00").toLocaleDateString(undefined,o):"";
+const T=D.targets;
+
+// promo aggregation: slots, running, inconsistent, notact, notvisited, outlets{act,yet,nv}
+function pAgg(rows){const s={n:0,a:0,i:0,x:0,nc:0,nv:0},o=new Map();
+ for(const r of rows){s.n++;const st=r[PST];if(st===0)s.a++;else if(st===1)s.i++;else if(st===2)s.x++;else if(st===3)s.nc++;else s.nv++;
+  let q=o.get(r[4]);if(!q){q={a:0,v:0};o.set(r[4],q)}if(r[POA]===1||(r[POA]===undefined&&st===0))q.a=1;if(st<4)q.v=1}
+ s.oN=o.size;s.oA=0;s.oY=0;s.oV=0;for(const q of o.values()){if(q.a)s.oA++;else if(q.v)s.oY++;else s.oV++}
+ s.rate=s.n?s.a/s.n:null;s.orate=s.oN?s.oA/s.oN:null;return s}
+const period=P.info&&P.info.start?`${dIso(P.info.start)} to ${dIso(P.info.end,{day:"numeric",month:"short",year:"numeric"})}`:"";
+
+const KPI=[
+ {k:"osa",name:"On-shelf availability average",short:"OSA",t:T.osa,num:s=>s[M.osaA],den:s=>s[M.osaN],sub:(n,d)=>`${fi(n)} of ${fi(d)} SKU checks in stock`},
+ {k:"sos",name:"Share of shelf average",short:"SOS",t:T.sos,num:s=>s[M.sosS],den:s=>s[M.sosN],sub:(n,d)=>`Average of ${fi(d)} shelf readings`},
+ {k:"cov",name:"Coverage average",short:"Coverage",t:T.cov,num:s=>s[M.done],den:s=>s[M.plan],sub:(n,d,s)=>`${fi(n)} of ${fi(d)} visits done${s[M.adhoc]?`, ${fi(s[M.adhoc])} ad-hoc`:""}${s[M.exempt]?`. ${fi(s[M.exempt])} on leave or off left out`:""}`}];
+
+const GROUPS=[["msr","MSR","MSRs"],["supervisor","Supervisor","supervisors"],["account","Account","accounts"],["region","Region","regions"],["store","Outlet","outlets"]];
+const SORTSETS={"":[["osa",1,"Lowest OSA first"],["cov",1,"Lowest coverage first"],["promo",1,"Lowest promo first"],["sos",1,"Lowest SOS first"],["flags",-1,"Most promo flags"],["osa",-1,"Highest OSA first"],["name",1,"Name A to Z"]],
+ osa:[["osa",1,"Lowest OSA first"],["osa",-1,"Highest OSA first"],["oos",-1,"Most out of stock"],["osaN",-1,"Most SKU checks"],["name",1,"Name A to Z"]],
+ sos:[["sos",1,"Lowest SOS first"],["sos",-1,"Highest SOS first"],["sosN",-1,"Most shelf readings"],["name",1,"Name A to Z"]],
+ cov:[["cov",1,"Lowest coverage first"],["cov",-1,"Highest coverage first"],["miss",-1,"Most visits missed"],["exempt",-1,"Most leave / off days"],["name",1,"Name A to Z"]]};
+const sorts=()=>SORTSETS[S.kpi||""];
+// columns of the team scorecard: all KPIs, or one KPI with the counts behind it
+const pillC=(k,l,t)=>[k,l,o=>`<span class="pill ${rag(o[k],t)}">${pct(o[k])}</span>`];
+const numC=(k,l,cls)=>[k,l,o=>fi(o[k]),cls];
+const BOARDCOLS={osa:[pillC("osa","OSA",T.osa),numC("osaA","In stock"),numC("osaN","SKU checks"),numC("oos","Out of stock","bad"),numC("days","Days active")],
+ sos:[pillC("sos","SOS",T.sos),numC("sosN","Shelf readings"),numC("days","Days active")],
+ cov:[pillC("cov","Coverage",T.cov),numC("plan","Planned"),numC("done","Done"),numC("adhoc","Ad-hoc"),numC("miss","Missed","bad"),numC("exempt","Leave / off")]};
+const PVIEWS=[["account","Account","accounts"],["supervisor","Supervisor","supervisors"],["sku","SKU","SKUs"],["region","Region","regions"],["msr","MSR","MSRs"]];
+const PLISTS=[["yet","Yet to activate"],["nv","Not visited"],["act","Activated"]];
+const SHOW_OOS=false; // "SKUs most often out of stock" panel - switched off for now
+const TABS=["overview","promos","running","prop","feedback"];
+const PP=(D.prop&&D.prop.rows)||[]; // store checks: dims 0-5 as in facts, then the answers (1 yes, 0 no, -1 not answered) and their details
+const PX={exc:6,asset:7,so:8,items:9,photo:10,list:11,deliv:12};
+const XKINDS=[["so","Stock outs"],["asset","Unpaid assets"],["exc","Exceptional sales"]];
+const LISTKINDS=[...XKINDS,["paid","Paid assets"]];
+const XGROUPS=[["account","Account","accounts"],["supervisor","Supervisor","supervisors"],["region","Region","regions"],["msr","MSR","MSRs"],["store","Outlet","outlets"]];
+let S={xgroup:"account",xkind:"so",ptype:"",xlimit:25,xAll:false,rstat:"run",tab:"overview",from:0,to:last,region:"",account:"",supervisor:"",msr:"",kpi:"",group:"msr",xview:"sum",glimit:24,gall:false,sort:0,limit:25,oosAll:false,
+ pview:"account",psku:"",plist:"yet",plimit:25,pAll:false};
+
+function presetRanges(){if(last<0)return[];const lastD=new Date(L.date[last]+"T00:00");
+ const since=days=>{const c=new Date(lastD);c.setDate(c.getDate()-days+1);const iso=c.toISOString().slice(0,10);let i=L.date.findIndex(d=>d>=iso);return i<0?last:i};
+ const mon=L.date[last].slice(0,7),mi=L.date.findIndex(d=>d.startsWith(mon));
+ return [["Latest day",last,last],["Last 7 days",since(7),last],["Last 14 days",since(14),last],["This month",mi,last],[`All ${L.date.length} days`,0,last]]}
+
+function applyParams(p){for(const k of DIMS){const v=p.get(k);if(v){const i=L[k].indexOf(v.toUpperCase());if(i>=0)S[k]=String(i)}}
+ const f=p.get("from"),t=p.get("to");if(f&&L.date.includes(f))S.from=L.date.indexOf(f);if(t&&L.date.includes(t))S.to=L.date.indexOf(t);
+ if(!f&&last>=0)S.from=presetRanges()[1][1];const g=p.get("view");if(g&&GROUPS.some(x=>x[0]===g))S.group=g;
+ const tb=p.get("tab");if(tb&&TABS.includes(tb))S.tab=tb;
+ const kp=p.get("kpi");if(kp&&KPI.some(K=>K.k===kp))S.kpi=kp;if(p.get("sub")==="displays")S.xview="xd"}
+function params(){const p=new URLSearchParams();for(const k of DIMS)if(S[k]!=="")p.set(k,L[k][+S[k]]);
+ if(last>=0){p.set("from",L.date[S.from]);p.set("to",L.date[S.to])}if(S.group!=="msr")p.set("view",S.group);if(S.tab!=="overview")p.set("tab",S.tab);
+ if(S.tab==="overview"&&S.kpi)p.set("kpi",S.kpi);if(S.tab==="prop"&&S.xview==="xd")p.set("sub","displays");return p}
+function viewLink(){const p=params().toString();return INIT&&INIT.base?INIT.base+"?system="+D.system.toLowerCase()+"&"+p:location.href.split("#")[0]+"#"+p}
+function saveLink(){if(INIT)return;try{history.replaceState(null,"","#"+params().toString())}catch(e){}}
+function filterText(){return DIMS.filter(k=>S[k]!=="").map(k=>`${k}=${L[k][+S[k]]}`).join("; ")}
+
+function pass(r,skip,from=S.from,to=S.to){if(r[0]<from||r[0]>to)return false;
+ for(const k of DIMS)if(k!==skip&&S[k]!==""&&r[DIM[k]]!==+S[k])return false;return true}
+function passP(r,skip){for(const k of DIMS)if(k!==skip&&S[k]!==""&&r[PD[k]]!==+S[k])return false;return true}
+function agg(rows){const s=new Array(NM).fill(0);for(const r of rows)for(let i=6;i<NM;i++)s[i]+=r[i];return s}
+const val=(K,s)=>{const d=K.den(s);return d>0?K.num(s)/d:null};
+
+function fillSel(id,key,vals,all){const el=$(id),cur=S[key];
+ let h=`<option value="">${all}</option>`+vals.map(i=>`<option value="${i}">${esc(tc(L[key][i]))}</option>`).join("");
+ if(cur!==""&&!vals.includes(+cur))h+=`<option value="${cur}">${esc(tc(L[key][+cur]))} (no data)</option>`;el.innerHTML=h;el.value=cur}
+function refreshFilters(){
+ const all={region:"All regions",account:"All accounts",supervisor:"All supervisors",msr:"All MSRs"},promoTab=S.tab==="promos"||S.tab==="running";
+ for(const k of DIMS){const set=new Set();
+  if(promoTab){for(const r of PR)if(passP(r,k))set.add(r[PD[k]])}else{for(const r of scopeRows())if(pass(r,k))set.add(r[DIM[k]])}
+  fillSel("f"+k[0].toUpperCase()+k.slice(1),k,[...set].sort((a,b)=>L[k][a].localeCompare(L[k][b])),all[k])}
+ $("dateSel").hidden=promoTab||S.tab==="feedback"||last<0;
+ const o=L.date.map((d,i)=>`<option value="${i}">${dt(i,{weekday:"short",day:"numeric",month:"short"})}</option>`).join("");
+ $("fFrom").innerHTML=o;$("fTo").innerHTML=o;$("fFrom").value=S.from;$("fTo").value=S.to;
+ const n=DIMS.filter(k=>S[k]!=="").length;$("fn").hidden=!n;$("fn").textContent=n;
+ const pr=presetRanges();$("presets").hidden=(S.tab!=="overview"&&S.tab!=="prop")||last<0;
+ $("presets").innerHTML=pr.map(([l,f,t],i)=>`<button class="chip" type="button" data-p="${i}" aria-pressed="${S.from===f&&S.to===t}">${l}</button>`).join("")+
+  (pr.some(([,f,t])=>S.from===f&&S.to===t)?"":`<button class="chip" type="button" aria-pressed="true" data-open>${dt(S.from)} to ${dt(S.to)}</button>`);
+ $("presets").querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{const[,f,t]=pr[+b.dataset.p];S.from=f;S.to=t;render()});
+ $("presets").querySelectorAll("[data-open]").forEach(b=>b.onclick=openSheet);
+ $("chips").innerHTML=DIMS.filter(k=>S[k]!=="").map(k=>`<button class="chip active" type="button" data-k="${k}" aria-label="Remove ${esc(tc(L[k][+S[k]]))}">${esc(tc(L[k][+S[k]]))} ✕</button>`).join("")+
+  (S.tab==="promos"&&S.psku!==""?`<button class="chip active" type="button" data-psku aria-label="Remove SKU">${esc(tc(L.sku[+S.psku]))} ✕</button>`:"");
+ $("chips").querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>{S[b.dataset.k]="";render()});
+ $("chips").querySelectorAll("[data-psku]").forEach(b=>b.onclick=()=>{S.psku="";render()})}
+function openSheet(){$("sheet").classList.add("on");$("scrim").classList.add("on");$("openF").setAttribute("aria-expanded","true")}
+function closeSheet(){$("sheet").classList.remove("on");$("scrim").classList.remove("on");$("openF").setAttribute("aria-expanded","false");$("openF").focus({preventScroll:true})}
+
+function render(){
+ saveLink();refreshFilters();
+ document.querySelectorAll("#nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.t===S.tab));
+ TABS.forEach(t=>$("t-"+t).hidden=S.tab!==t);
+ if(S.tab==="overview")renderOverview();else if(S.tab==="promos")renderPromos();else if(S.tab==="running")renderRunning();else if(S.tab==="prop")renderProp();else renderFeedback()}
+
+// ---------------- overview
+function kpiCard(K,v,sub,dl,span,pressed,clickable){const c=rag(v,K.t);
+ return `<${clickable?"button":"div"} class="kpi" ${clickable?`type="button" data-k="${K.k}" aria-pressed="${pressed}"`:""}><h2>${K.name}</h2><div class="v ${c}">${pct(v)}</div>
+ <div class="gauge"><i class="f-${c}" style="width:${v==null?0:Math.min(v,1)*100}%"></i><b style="left:${K.t[0]*100}%"></b></div>
+ <div class="sub">${sub}</div>${dl==null?"":`<div class="delta ${dl>=0?"good":"bad"}">${dl>=0?"▲":"▼"} ${Math.abs(dl).toFixed(1)} pts vs prior ${span} day${span>1?"s":""}</div>`}</${clickable?"button":"div"}>`}
+function renderOverview(){
+ if(last<0){$("scope").textContent="No field data in this run.";$("kpis").innerHTML="";["trend","board","oos"].forEach(i=>$(i).innerHTML="");}
+ const rows=F.filter(r=>pass(r)),tot=agg(rows),span=S.to-S.from+1,pf=S.from-span;
+ const prev=pf>=0?agg(F.filter(r=>pass(r,null,pf,S.from-1))):null;
+ const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));
+ if(last>=0)$("scope").textContent=`${who.length?who.join(", "):"All CIL teams"} · ${S.from===S.to?dt(S.from,{weekday:"short",day:"numeric",month:"short"}):dt(S.from)+" to "+dt(S.to)}`;
+ const pa=pAgg(PR.filter(r=>passP(r)));
+ const PK={k:"promo",name:"Promo execution average",t:T.promo};
+ $("kpis").innerHTML=KPI.map(K=>{const v=val(K,tot),pv=prev?val(K,prev):null;
+  return kpiCard(K,v,v==null?"No data for this selection":K.sub(K.num(tot),K.den(tot),tot),v!=null&&pv!=null?(v-pv)*100:null,span,S.kpi===K.k,true)}).join("")+
+  kpiCard(PK,pa.orate,pa.n?`${fi(pa.a)} of ${fi(pa.n)} promo SKU slots running${period?`, promo period ${period}`:""}`:"No promo report for this selection",null,0,false,false)
+   .replace('<div class="kpi"','<button class="kpi" type="button" data-go="promos"').replace(/<\/div>$/,"</button>");
+ document.querySelectorAll("#kpis [data-k]").forEach(b=>b.onclick=()=>setKpi(S.kpi===b.dataset.k?"":b.dataset.k));
+ const FK=KPI.find(K=>K.k===S.kpi);
+ $("focus").hidden=!FK;$("focus").innerHTML=FK?`<span>Showing <b>${FK.name}</b> only</span><button class="linkbtn" type="button" id="allK">Show all KPIs</button>`:"";
+ if($("allK"))$("allK").onclick=()=>setKpi("");
+ $("oosPanel").hidden=!SHOW_OOS||!(S.kpi===""||S.kpi==="osa");$("actPanel").hidden=S.kpi!=="";
+ $("ovRow").hidden=$("oosPanel").hidden&&$("actPanel").hidden;$("ovRow").classList.toggle("one",$("oosPanel").hidden!==$("actPanel").hidden);
+ $("covSupPanel").hidden=S.kpi!=="cov";if(S.kpi==="cov"&&last>=0)drawCovSup();
+ document.querySelectorAll("#kpis [data-go]").forEach(b=>b.onclick=()=>goTab("promos"));
+ if(last>=0){drawTrend(rows);drawBoard(rows);if(SHOW_OOS)drawOOS()}
+ const yet=outletList("yet");
+ $("ovActs").innerHTML=yet.length?`<ul class="list">${yet.slice(0,6).map(liOutlet).join("")}</ul><button class="more" type="button" id="toPromos">See all ${fi(yet.length)} in Promos</button>`:'<p class="empty">Every visited outlet in this selection has a promo running.</p>';
+ if($("toPromos"))$("toPromos").onclick=()=>{S.plist="yet";goTab("promos")};
+ $("ovActNote").textContent=period?`Promo period ${period}, from ${P.info.file||"the latest compliance report"}.`:""}
+
+const KCOL={osa:"var(--brand)",sos:"var(--warn)",cov:"var(--c3)"};
+function drawTrend(rows){const FK=KPI.find(k=>k.k===S.kpi),SER=FK?[FK]:KPI,K=FK||KPI[0];
+ $("trendTitle").textContent=FK?`${FK.short} by day`:"OSA, SOS and coverage by day";$("tip").textContent="";
+ $("legend").innerHTML=FK?"":SER.map(k=>`<span><i style="background:${KCOL[k.k]}"></i>${k.short}</span>`).join("");
+ const by={};for(const r of rows)(by[r[0]]??=[]).push(r);const pts=[];
+ for(let d=S.from;d<=S.to;d++){const s=by[d]?agg(by[d]):null;pts.push({d,vs:SER.map(k=>s?val(k,s):null)})}
+ pts.forEach(p=>p.v=p.vs[0]);
+ const vals=pts.flatMap(p=>p.vs).filter(v=>v!=null);
+ if(!vals.length){$("trend").innerHTML='<p class="empty">No readings for this selection. Pick a longer date range or clear a filter.</p>';return}
+ const W=Math.max(300,$("trend").clientWidth||700),H=W<500?190:230,pl=38,pr=10,pt=12,pb=26;
+ let lo=FK?Math.min(...vals,K.t[1]):Math.min(...vals),hi=FK?Math.max(...vals,K.t[0]):Math.max(...vals);lo=Math.max(0,Math.floor((lo-.05)*10)/10);hi=Math.min(1,Math.ceil((hi+.02)*10)/10);if(hi-lo<.1)hi=Math.min(1,lo+.1);
+ const x=i=>pl+(pts.length<2?(W-pl-pr)/2:i*(W-pl-pr)/(pts.length-1)),y=v=>pt+(hi-v)/(hi-lo)*(H-pt-pb);
+ let g="";const gs=hi-lo>.45?.2:.1;for(let t=lo;t<=hi+1e-9;t+=gs)g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${pl-6}" y="${y(t)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${Math.round(t*100)}%</text>`;
+ if(FK)g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(K.t[0])}" y2="${y(K.t[0])}" stroke="var(--good)" stroke-dasharray="5 4"/><text x="${W-pr}" y="${y(K.t[0])-5}" text-anchor="end" font-size="11" fill="var(--good)">Target ${pct(K.t[0])}</text>`;
+ SER.forEach((k,si)=>{const col=KCOL[k.k];let path="",pen=false;pts.forEach((p,i)=>{const v=p.vs[si];if(v==null){pen=false;return}path+=(pen?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1);pen=true});
+  g+=`<path d="${path}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>`;
+  pts.forEach((p,i)=>{const v=p.vs[si];if(v!=null)g+=`<circle cx="${x(i)}" cy="${y(v)}" r="${pts.length>20?2.5:3.5}" fill="var(--panel)" stroke="${col}" stroke-width="2"/>`})});
+ const step=Math.ceil(pts.length/(W<500?4:8));pts.forEach((p,i)=>{const lastI=pts.length-1;if((i%step===0&&(i===lastI||lastI-i>=step*0.7))||i===lastI)g+=`<text x="${x(i)}" y="${H-7}" text-anchor="${pts.length>1&&i===0?"start":pts.length>1&&i===lastI?"end":"middle"}" font-size="11" fill="var(--muted)">${dt(p.d)}</text>`});
+ g+=`<line id="cur" x1="0" x2="0" y1="${pt}" y2="${H-pb}" stroke="var(--muted)" visibility="hidden"/><rect x="${pl}" y="0" width="${W-pl-pr}" height="${H}" fill="transparent" id="hit"/>`;
+ $("trend").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${FK?FK.name:"OSA, SOS and coverage"} by day">${g}</svg>`;
+ const svg=$("trend").querySelector("svg"),cur=$("cur");
+ const pick=e=>{const b=svg.getBoundingClientRect(),px=(e.clientX-b.left)*W/b.width;let bi=0,bd=1e9;
+  pts.forEach((p,i)=>{const d=Math.abs(x(i)-px);if(d<bd){bd=d;bi=i}});const p=pts[bi];
+  cur.setAttribute("x1",x(bi));cur.setAttribute("x2",x(bi));cur.setAttribute("visibility","visible");
+  $("tip").textContent=`${dt(p.d,{weekday:"short",day:"numeric",month:"short"})}: `+(FK?(p.v==null?"no readings":pct(p.v)):SER.map((k,si)=>`${k.short} ${p.vs[si]==null?"–":pct(p.vs[si])}`).join(", "))};
+ $("hit").addEventListener("pointerdown",pick);$("hit").addEventListener("pointermove",e=>{if(e.pointerType==="mouse"||e.buttons)pick(e)})}
+
+function drawBoard(rows){
+ $("groupTabs").innerHTML=GROUPS.map(([k,l])=>`<button class="chip" type="button" data-g="${k}" aria-pressed="${S.group===k}">By ${k==="msr"?"MSR":l.toLowerCase()}</button>`).join("");
+ $("groupTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.group=b.dataset.g;S.limit=25;render()});
+ const SORTS=sorts(),FK=KPI.find(K=>K.k===S.kpi);if(S.sort>=SORTS.length)S.sort=0;
+ $("boardTitle").textContent=FK?`${FK.short} by team`:"Team scorecard";
+ $("sortSel").innerHTML=SORTS.map((s,i)=>`<option value="${i}">${s[2]}</option>`).join("");$("sortSel").value=S.sort;
+ const gi=DIM[S.group],grp=new Map();
+ for(const r of rows){let g=grp.get(r[gi]);if(!g){g={rows:[],sup:new Map(),days:new Set()};grp.set(r[gi],g)}g.rows.push(r);
+  if(r[M.done]>0||r[M.osaN]>0)g.days.add(r[0]);g.sup.set(r[3],(g.sup.get(r[3])||0)+1)}
+ const pg=new Map();for(const r of PR){if(!passP(r))continue;const k=r[PD[S.group]];(pg.get(k)||pg.set(k,[]).get(k)).push(r)}
+ const list=[...grp].map(([id,g])=>{const s=agg(g.rows),p=pAgg(pg.get(id)||[]),o={id,name:tc(L[S.group][id]),days:g.days.size,flags:p.i,promo:p.orate,
+  sup:tc(L.supervisor[[...g.sup].sort((a,b)=>b[1]-a[1])[0][0]])};KPI.forEach(K=>o[K.k]=val(K,s));
+  Object.assign(o,{osaA:s[M.osaA],osaN:s[M.osaN],oos:s[M.osaN]-s[M.osaA],sosN:s[M.sosN],plan:s[M.plan],done:s[M.done],adhoc:s[M.adhoc],exempt:s[M.exempt],miss:Math.max(0,s[M.plan]-s[M.done])});return o})
+  .filter(o=>!FK||o[FK.k]!=null||(FK.k==="cov"&&o.exempt>0));
+ const [col,dir]=SORTS[S.sort];
+ list.sort((a,b)=>{const av=a[col],bv=b[col];if(av==null&&bv==null)return 0;if(av==null)return 1;if(bv==null)return -1;return(typeof av==="string"?av.localeCompare(bv):av-bv)*dir});
+ const [,lbl,plural]=GROUPS.find(g=>g[0]===S.group),drill=S.group!=="store";
+ const cols=FK?BOARDCOLS[FK.k]:[...KPI.map(K=>pillC(K.k,K.short,K.t)),pillC("promo","Promo",T.promo),numC("flags","Promo flags","warn"),numC("days","Days active")];
+ const heads=[["name",lbl],...cols.map(c=>[c[0],c[1]])];
+ const shown=list.slice(0,S.limit);
+ $("board").innerHTML=list.length?`<table><thead><tr>${heads.map(([c,l])=>`<th><button type="button" data-c="${c}">${l}${col===c?(dir>0?" ▲":" ▼"):""}</button></th>`).join("")}</tr></thead><tbody>${
+  shown.map(o=>`<tr${drill?` class="go" tabindex="0" data-id="${o.id}"`:""}><td><span>${esc(o.name)}${S.group==="msr"?`<small>${esc(o.sup)}</small>`:""}</span></td>${
+  cols.map(([k,l,f,cls])=>`<td data-l="${l}"${cls&&o[k]?` class="${cls}"`:""}>${f(o)}</td>`).join("")}</tr>`).join("")}</tbody></table>${
+  list.length>S.limit?`<button class="more" type="button" id="moreB">Show all ${list.length} ${plural}</button>`:""}`
+  :'<p class="empty">Nobody matches these filters. Clear a filter to see the team.</p>';
+ $("board").querySelectorAll("th button").forEach(b=>b.onclick=()=>{const c=b.dataset.c;if(!SORTS.some(s=>s[0]===c))return;let i=SORTS.findIndex(s=>s[0]===c&&(col!==c||s[1]!==dir));if(i<0)i=SORTS.findIndex(s=>s[0]===c);if(i>=0){S.sort=i;render()}});
+ if($("moreB"))$("moreB").onclick=()=>{S.limit=1e9;render()};
+ if(drill)$("board").querySelectorAll("tr.go").forEach(tr=>{const go=()=>{S[S.group]=tr.dataset.id;S.group=S.group==="msr"?"store":"msr";S.limit=25;render();scrollTo({top:0,behavior:"smooth"})};
+  tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go()}});
+ const tail={"":" Promo and promo flags come from the latest compliance report (flags are Yes-then-No entries). Coverage counts planned visits done plus ad-hoc visits.",
+  osa:" OSA counts a SKU check as in stock when one or more pieces are on shelf.",sos:" SOS is the average of the shelf readings.",
+  cov:" Done counts planned visits done plus ad-hoc visits. Missed is planned visits not done. Leave, day off, week off and incorrect call cycle days are left out."}[S.kpi||""];
+ $("boardNote").textContent=list.length?`${list.length} ${list.length===1?lbl:plural}.${drill?" Tap a row to see its "+(S.group==="msr"?"outlets":"MSRs")+".":""}${tail}`:""}
+
+function setKpi(k){S.kpi=k;S.sort=0;S.limit=25;render();track("kpi",k||"all")}
+
+// coverage, one row per supervisor (other filters apply; the supervisor filter only highlights)
+function drawCovSup(){const K=KPI.find(k=>k.k==="cov"),grp=new Map();
+ for(const r of F){if(!pass(r,"supervisor"))continue;let g=grp.get(r[3]);if(!g){g={rows:[],msr:new Map()};grp.set(r[3],g)}g.rows.push(r);(g.msr.get(r[4])||g.msr.set(r[4],[]).get(r[4])).push(r)}
+ const mk=(id,rows,msr)=>{const s=agg(rows),o={id,name:id==null?"All supervisors":tc(L.supervisor[id]),v:val(K,s),plan:s[M.plan],done:s[M.done],adhoc:s[M.adhoc],exempt:s[M.exempt],miss:Math.max(0,s[M.plan]-s[M.done]),msrs:0,below:0};
+  for(const rs of msr.values()){const mv=val(K,agg(rs));if(mv==null)continue;o.msrs++;if(mv<K.t[0])o.below++}return o};
+ const list=[...grp].map(([id,g])=>mk(id,g.rows,g.msr)).filter(o=>o.plan>0||o.exempt>0).sort((a,b)=>(a.v??2)-(b.v??2)||b.miss-a.miss);
+ if(!list.length){$("covSup").innerHTML='<p class="empty">No coverage data for this selection.</p>';$("covSupNote").textContent="";return}
+ const allMsr=new Map();for(const g of grp.values())for(const [m,rs] of g.msr)(allMsr.get(m)||allMsr.set(m,[]).get(m)).push(...rs);
+ const tot=mk(null,[...grp.values()].flatMap(g=>g.rows),allMsr);
+ const row=(o,cls)=>`<tr class="${cls}"${o.id!=null?` tabindex="0" data-id="${o.id}"`:""}><td><span>${esc(o.name)}</span></td><td data-l="Coverage"><span class="pill ${rag(o.v,K.t)}">${pct(o.v)}</span></td>
+  <td data-l="Planned">${fi(o.plan)}</td><td data-l="Done">${fi(o.done)}</td><td data-l="Ad-hoc">${fi(o.adhoc)}</td><td data-l="Missed"${o.miss?' class="bad"':""}>${fi(o.miss)}</td><td data-l="Leave / off">${fi(o.exempt)}</td>
+  <td data-l="MSRs below target">${fi(o.below)}<small>of ${fi(o.msrs)} MSRs</small></td></tr>`;
+ $("covSup").innerHTML=`<table><thead><tr><th>Supervisor</th><th>Coverage</th><th>Planned</th><th>Done</th><th>Ad-hoc</th><th>Missed</th><th>Leave / off</th><th>MSRs below target</th></tr></thead><tbody>${
+  list.map(o=>row(o,"go"+(S.supervisor===String(o.id)?" sel":""))).join("")}${list.length>1?row(tot,"tot"):""}</tbody></table>`;
+ $("covSup").querySelectorAll("tr.go").forEach(tr=>{const go=()=>{S.supervisor=S.supervisor===tr.dataset.id?"":tr.dataset.id;S.group="msr";S.limit=25;render();$("boardTitle").scrollIntoView({behavior:"smooth",block:"start"})};
+  tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go()}});
+ $("covSupNote").textContent=`Lowest coverage first. Tap a supervisor to see their MSRs in the scorecard above; tap again to clear. Target ${pct(K.t[0])}. Region, account, MSR and date filters apply.`}
+
+function drawOOS(){const a2=new Map();
+ for(const r of D.sku){if(DIMS.some((k,i)=>S[k]!==""&&r[i]!==+S[k]))continue;const g=a2.get(r[4])||[0,0];g[0]+=r[5];g[1]+=r[6];a2.set(r[4],g)}
+ const list=[...a2].filter(([,g])=>g[1]>=D.minSkuChecks&&g[1]>g[0]).map(([k,g])=>({sku:L.sku[k],osa:g[0]/g[1],oos:g[1]-g[0],n:g[1]})).sort((a,b)=>a.osa-b.osa||b.oos-a.oos);
+ const shown=S.oosAll?list:list.slice(0,10);
+ $("oos").innerHTML=list.length?`<ul class="list">${shown.map(o=>`<li><span class="t"><b>${esc(tc(o.sku))}</b><small>Out of stock ${fi(o.oos)} of ${fi(o.n)} checks</small></span><span class="pill ${rag(o.osa,T.osa)}">${pct(o.osa)}</span></li>`).join("")}</ul>${list.length>10&&!S.oosAll?`<button class="more" type="button" id="oosMore">Show all ${list.length} SKUs</button>`:""}`:'<p class="empty">No out-of-stock SKUs for this selection.</p>';
+ if($("oosMore"))$("oosMore").onclick=()=>{S.oosAll=true;drawOOS()};
+ $("oosNote").textContent=`Last ${D.skuDays} days of data for the region, account, supervisor and MSR selected. SKUs checked fewer than ${D.minSkuChecks} times are left out.`}
+
+// ---------------- promos
+function outletList(kind,skuFilter){const o=new Map();
+ for(const r of PR){if(!passP(r))continue;if(skuFilter!==undefined&&skuFilter!==""&&r[5]!==+skuFilter)continue;
+  let q=o.get(r[4]);if(!q){q={store:r[4],acc:r[1],sup:r[2],msr:r[3],a:0,v:0,n:0,run:0,miss:[]};o.set(r[4],q)}
+  q.n++;if(r[PST]===0)q.run++;else q.miss.push(r[5]);if(r[POA]===1||(r[POA]===undefined&&r[PST]===0))q.a=1;if(r[PST]<4)q.v=1}
+ return [...o.values()].filter(q=>kind==="act"?q.a:kind==="yet"?(!q.a&&q.v):(!q.a&&!q.v)).sort((a,b)=>L.store[a.store].localeCompare(L.store[b.store]))}
+function liOutlet(q){const st=q.a?["b-good","Activated"]:q.v?["b-warn","Yet to activate"]:["b-mut","Not visited"];
+ return `<li><span class="t"><b>${esc(tc(L.store[q.store]))}</b><small>${esc(tc(L.account[q.acc]))} · ${esc(tc(L.supervisor[q.sup]))}${q.msr!=null&&L.msr[q.msr]!=="UNASSIGNED"?` · ${esc(tc(L.msr[q.msr]))}`:""}<br>${q.run} of ${q.n} promo SKUs running</small></span><span class="badge ${st[0]}">${st[1]}</span></li>`}
+function renderPromos(){
+ const rows=PR.filter(r=>passP(r)&&(S.psku===""||r[5]===+S.psku)),s=pAgg(rows);
+ const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));if(S.psku!=="")who.push(tc(L.sku[+S.psku]));
+ $("pscope").textContent=`${who.length?who.join(", "):"All CIL accounts"}${period?` · promo period ${period}`:""}`;
+ if(!PR.length){$("pkpis").innerHTML="";$("pboard").innerHTML='<p class="empty">No promo compliance report was found in the last run. Check the promo folder setting in msr_platform.py.</p>';$("pList").innerHTML="";$("pTabs").innerHTML="";$("pListTabs").innerHTML="";return}
+ const card=(name,v,sub,t)=>kpiCard({k:"",name,t:t||T.promo},v,sub,null,0,false,false);
+ $("pkpis").innerHTML=card("Outlets activated",s.orate,`${fi(s.oA)} of ${fi(s.oN)} outlets have a promo running`)+
+  card("Promo SKUs running",s.rate,`${fi(s.a)} of ${fi(s.n)} outlet and SKU slots`)+
+  `<div class="kpi"><h2>Yet to activate</h2><div class="v warn">${fi(s.oY)}</div><div class="sub" style="margin-top:10px">Outlets visited with no promo running</div></div>`+
+  `<div class="kpi"><h2>Not visited</h2><div class="v">${fi(s.oV)}</div><div class="sub" style="margin-top:10px">Outlets with no visit in the promo period. ${fi(s.i)} Yes-then-No entries.</div></div>`;
+ $("pTabs").innerHTML=PVIEWS.map(([k,l])=>`<button class="chip" type="button" data-v="${k}" aria-pressed="${S.pview===k}">By ${k==="msr"||k==="sku"?l:l.toLowerCase()}</button>`).join("");
+ $("pTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.pview=b.dataset.v;S.plimit=25;render()});
+ const key=PD[S.pview],grp=new Map();for(const r of rows){const k=r[key];(grp.get(k)||grp.set(k,[]).get(k)).push(r)}
+ const lst=[...grp].map(([id,rs])=>({id,name:tc((S.pview==="sku"?L.sku:L[S.pview])[id]),s:pAgg(rs)})).sort((a,b)=>(a.s.rate??2)-(b.s.rate??2)||b.s.n-a.s.n);
+ const [,lbl,plural]=PVIEWS.find(v=>v[0]===S.pview),isSku=S.pview==="sku";
+ const head=isSku?["SKU","Rate","Running","Slots","Yes then No","Not running","Not visited"]:[lbl,"Outlets activated","SKUs running","Outlets","Activated","Yet to activate","Not visited"];
+ const shown=lst.slice(0,S.plimit);
+ $("pboard").innerHTML=lst.length?`<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${shown.map(o=>{const s=o.s;
+  const cells=isSku?[["Rate",`<span class="pill ${rag(s.rate,T.promo)}">${pct(s.rate)}</span>`],["Running",fi(s.a)],["Slots",fi(s.n)],["Yes then No",fi(s.i)],["Not running",fi(s.x+s.nc)],["Not visited",fi(s.nv)]]
+   :[["Outlets activated",`<span class="pill ${rag(s.orate,T.promo)}">${pct(s.orate)}</span>`],["SKUs running",`<span class="pill ${rag(s.rate,T.promo)}">${pct(s.rate)}</span>`],["Outlets",fi(s.oN)],["Activated",fi(s.oA)],["Yet to activate",fi(s.oY)],["Not visited",fi(s.oV)]];
+  const sel=isSku&&S.psku===String(o.id);
+  return `<tr class="go${sel?" sel":""}" tabindex="0" data-id="${o.id}"><td>${esc(o.name)}</td>${cells.map(([l,v])=>`<td data-l="${l}">${v}</td>`).join("")}</tr>`}).join("")}</tbody></table>${lst.length>S.plimit?`<button class="more" type="button" id="pMore">Show all ${lst.length} ${plural}</button>`:""}`:'<p class="empty">No promo SKUs for this selection.</p>';
+ if($("pMore"))$("pMore").onclick=()=>{S.plimit=1e9;render()};
+ $("pboard").querySelectorAll("tr.go").forEach(tr=>{const go=()=>{const id=tr.dataset.id;
+  if(isSku){S.psku=S.psku===id?"":id;S.plist="yet"}else{S[S.pview]=id;S.pview=S.pview==="account"?"sku":"account"}
+  S.plimit=25;render();if(isSku)$("pListTitle").scrollIntoView({behavior:"smooth",block:"start"});else scrollTo({top:0,behavior:"smooth"})};tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go()}});
+ $("pNote").textContent=isSku?"Worst first. Tap a SKU to list the outlets where it is not running.":`Worst first. Tap a row to see its ${S.pview==="account"?"SKUs":"accounts"}. An outlet counts as activated when at least one promo SKU is running at its last visit.`;
+ $("pListTitle").textContent=S.psku!==""?`Outlets for ${tc(L.sku[+S.psku])}`:"Outlets to follow up";
+ $("pListTabs").innerHTML=PLISTS.map(([k,l])=>`<button class="chip" type="button" data-l="${k}" aria-pressed="${S.plist===k}">${l}</button>`).join("");
+ $("pListTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.plist=b.dataset.l;S.pAll=false;render()});
+ const ol=outletList(S.plist,S.psku),show=S.pAll?ol:ol.slice(0,15);
+ $("pList").innerHTML=ol.length?`<ul class="list">${show.map(liOutlet).join("")}</ul>${ol.length>15&&!S.pAll?`<button class="more" type="button" id="plMore">Show all ${fi(ol.length)}</button>`:""}`:'<p class="empty">No outlets in this group for the current selection.</p>';
+ if($("plMore"))$("plMore").onclick=()=>{S.pAll=true;render()};
+ $("pListNote").textContent=P.info&&P.info.file?`From ${P.info.file} (updated ${P.info.updated}).`:""}
+
+// ---------------- promos running
+const RUN=(D.running&&D.running.items)||[];
+const DAY=864e5,today=(()=>{const t=new Date();t.setHours(0,0,0,0);return t})();
+const dd=s=>s?new Date(s+"T00:00"):null;
+function runStatus(it){const s=dd(it.start),e=dd(it.end);if(!s||!e)return"nodate";if(e<today)return"ended";if(s>today)return"soon";return"run"}
+function allowedAccounts(){if(!DIMS.some(k=>S[k]!==""))return null;const set=new Set();
+ for(const r of F)if(pass(r,null,0,last))set.add(L.account[r[DIM.account]]);for(const r of PR)if(passP(r))set.add(L.account[r[PD.account]]);return set}
+function renderRunning(){
+ const allow=allowedAccounts(),items=RUN.filter(it=>!allow||allow.has(it.account));
+ const groups={run:[],soon:[],ended:[],nodate:[]};items.forEach(it=>groups[runStatus(it)].push(it));
+ groups.run.sort((a,b)=>a.end.localeCompare(b.end));groups.soon.sort((a,b)=>a.start.localeCompare(b.start));groups.ended.sort((a,b)=>b.end.localeCompare(a.end));
+ const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));
+ $("rscope").textContent=`${who.length?who.join(", "):"All CIL accounts"} · ${items.length} promo file${items.length===1?"":"s"} in Promos Running · today ${today.toLocaleDateString(undefined,{day:"numeric",month:"short"})}`;
+ const tabs=[["run","Running now"],["soon","Starting soon"],["ended","Ended"],["nodate","No dates found"],["all","All"]];
+ $("rTabs").innerHTML=tabs.map(([k,l])=>`<button class="chip" type="button" data-r="${k}" aria-pressed="${S.rstat===k}">${l} (${k==="all"?items.length:groups[k].length})</button>`).join("");
+ $("rTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.rstat=b.dataset.r;render()});
+ const list=S.rstat==="all"?[...groups.run,...groups.soon,...groups.ended,...groups.nodate]:groups[S.rstat];
+ const accIdx=new Map(L.account.map((a,i)=>[a,i]));
+ $("rList").innerHTML=list.length?list.map(it=>{const st=runStatus(it),s=dd(it.start),e=dd(it.end);
+  const when=st==="nodate"?"Dates not found":`${s.toLocaleDateString(undefined,{day:"numeric",month:"short"})} to ${e.toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"})}`;
+  const rel=st==="run"?(()=>{const n=Math.round((e-today)/DAY);return n===0?"Ends today":`Ends in ${n} day${n>1?"s":""}`})():st==="soon"?(()=>{const n=Math.round((s-today)/DAY);return `Starts in ${n} day${n>1?"s":""}`})():st==="ended"?(()=>{const n=Math.round((today-e)/DAY);return `Ended ${n} day${n>1?"s":""} ago`})():"";
+  const badge={run:["b-good","Running"],soon:["b-warn","Starting soon"],ended:["b-mut","Ended"],nodate:["b-bad","Check dates"]}[st];
+  let act="";if(it.account&&accIdx.has(it.account)){const ai=accIdx.get(it.account),pa=pAgg(PR.filter(r=>r[PD.account]===ai));if(pa.oN)act=`<span>Outlets activated <b class="${rag(pa.orate,T.promo)}" style="display:inline">${pct(pa.orate)}</b></span>`}
+  const lines=it.lines.length?`<div class="lines">${it.lines.slice(0,60).map(l=>`<div><span>${esc(tc(l[0]))}</span><span>${esc([l[1]&&`Offer ${l[1]}`,l[2]&&`was ${l[2]}`,l[3]&&l[3]+" off",l[4]].filter(Boolean).join(" · "))}${(l[5]&&l[5]!==it.start)||(l[6]&&l[6]!==it.end)?`<br>${esc(dIso(l[5]))} to ${esc(dIso(l[6]))}`:""}</span></div>`).join("")}${it.lines.length>60?`<div><span>and ${it.lines.length-60} more lines</span><span></span></div>`:""}</div>`
+   :`<div class="lines"><div><span>The SKU lines are in the ${it.kind} file: ${esc(it.file)}</span><span></span></div></div>`;
+  return `<details class="promo"><summary><span class="t"><b>${esc(it.account?tc(it.account):"Account not recognised")}</b><small>${esc(it.title)}</small><small>${when}${it.src==="name"?" (from the file name)":it.src==="document"?" (from the document)":""}</small></span>
+   <span class="r"><span class="badge ${badge[0]}">${badge[1]}</span>${rel?`<span>${rel}</span>`:""}${act}<span>${it.lines.length?`${it.lines.length} SKU line${it.lines.length>1?"s":""}`:it.kind} <span class="chev">›</span></span></span></summary>${lines}
+   ${st==="ended"?`<p class="note" style="margin:0 0 12px">This promo has ended. Remove the file from Promos Running so it stops counting.</p>`:""}${st==="nodate"?`<p class="note" style="margin:0 0 12px">No start or end date was found in the file or its name. Add the dates to the file name, for example "Naivas 2ND OCT - 15TH OCT 2026".</p>`:""}</details>`}).join("")
+  :`<p class="empty">${RUN.length?"No promos in this group for the current filters.":"No promo files were found in Promos Running in the last run."}</p>`;
+ $("rNote").textContent="Tap a promo to see its SKUs, prices and discounts. Dates come from the START DATE and END DATE columns where the file has them, otherwise from the file name."}
+
+// ---------------- proposition (stock outs, unpaid visibility assets, exceptional sales)
+// unpaid assets and exceptional sales count unique outlets (an outlet reported twice counts once); stock outs count store checks
+const XUNIQUE=new Set(["asset","exc"]);
+function xAgg(rows){const s={n:0,stores:new Set()},u={};for(const [k] of XKINDS){s[k]=0;s[k+"N"]=0;u[k]={yes:new Set(),ans:new Set()}}
+ for(const r of rows){s.n++;s.stores.add(r[5]);for(const [k] of XKINDS){const v=r[PX[k]];if(v>=0){s[k+"N"]++;u[k].ans.add(r[5]);if(v>0){s[k]++;u[k].yes.add(r[5])}}}}
+ for(const k of XUNIQUE){s[k]=u[k].yes.size;s[k+"N"]=u[k].ans.size}return s}
+const xRate=(s,k)=>s[k+"N"]?s[k]/s[k+"N"]:null;
+const xDay=v=>/^\d{4}-\d{2}-\d{2}/.test(v)?dIso(v.slice(0,10),{day:"numeric",month:"short",year:"numeric"}):v;
+// paid asset audits (latest audit per outlet, last N days) - matched to field outlets by name
+const PAIDA=((D.prop&&D.prop.paid)||[]).map(it=>{const ix=(k,v)=>{if(!v)return null;const i=L[k].indexOf(String(v).toUpperCase());return i<0?null:i};
+ return Object.assign(it,{regionI:ix("region",it.region),accountI:ix("account",it.account),supervisorI:ix("supervisor",it.sup),storeI:ix("store",it.store),msrI:null})});
+(function(){const by=new Map();for(const r of [...F,...PP]){const m=by.get(r[5])||new Map();m.set(r[4],(m.get(r[4])||0)+1);by.set(r[5],m)}
+ for(const it of PAIDA)if(it.storeI!=null&&by.has(it.storeI))it.msrI=[...by.get(it.storeI)].sort((a,b)=>b[1]-a[1])[0][0]})();
+function auditPass(it){for(const k of DIMS){if(S[k]==="")continue;if(it[k+"I"]!==+S[k])return false}return true}
+const thumb=(url,label,alt)=>/^https?:\/\//.test(url)?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(url)}" alt="${esc(alt)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('noimg')">${esc(label)}</a>`:"";
+const photos=v=>String(v||"").match(/https?:\/\/[^\s,;|]+/g)||[];
+function renderProp(){
+ const xdN=new Set(PP.filter(r=>pass(r)&&r[PX.asset]>0).map(r=>r[5])).size;
+ $("xView").innerHTML=[["sum","Store checks"],["xd",`Extra displays (${fi(xdN)} outlets)`]].map(([k,l])=>`<button class="chip" type="button" data-v="${k}" aria-pressed="${S.xview===k}">${l}</button>`).join("");
+ $("xView").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.xview=b.dataset.v;S.glimit=24;render();track("prop",S.xview)});
+ $("xView").hidden=!PP.length;$("xXD").hidden=S.xview!=="xd"||!PP.length;$("xSum").hidden=S.xview==="xd"&&PP.length>0;
+ if(S.xview==="xd"&&PP.length){renderXD();return}
+ const rows=PP.filter(r=>pass(r)),s=xAgg(rows);
+ const audits=PAIDA.filter(auditPass),paidA=audits.filter(it=>it.paid);s.paid=paidA.length;s.paidN=audits.length;
+ const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));
+ $("xscope").textContent=last<0?"No store checks in this run.":`${who.length?who.join(", "):"All CIL teams"} · ${S.from===S.to?dt(S.from,{weekday:"short",day:"numeric",month:"short"}):dt(S.from)+" to "+dt(S.to)}`;
+ if(!PP.length){$("xkpis").innerHTML="";$("xTabs").innerHTML="";$("xListTabs").innerHTML="";$("xList").innerHTML="";$("xNote").textContent="";$("xListNote").textContent="";
+  $("xboard").innerHTML='<p class="empty">No Proposition Report data was found in the last run. Run merger.py with the Proposition Report in Input, then rebuild the platform.</p>';return}
+ const card=(name,k,cls,what)=>`<div class="kpi"><h2>${name}</h2><div class="v ${s[k]?cls:""}">${fi(s[k])}</div><div class="sub" style="margin-top:10px">${s[k+"N"]?`${pct(xRate(s,k))} of ${fi(s[k+"N"])} store checks ${what}`:"No answers for this selection"}</div></div>`;
+ $("xkpis").innerHTML=`<div class="kpi"><h2>Store checks</h2><div class="v">${fi(s.n)}</div><div class="sub" style="margin-top:10px">${fi(s.stores.size)} outlet${s.stores.size===1?"":"s"} checked</div></div>`+
+  card("Stock outs","so","bad","reported a stock out")+card("Outlets with unpaid assets","asset","good","had an unpaid asset running")+card("Outlets with exceptional sales","exc","good","reported an exceptional sale")+
+  `<div class="kpi"><h2>Paid assets</h2><div class="v ${s.paid?"good":""}">${fi(s.paid)}</div><div class="sub" style="margin-top:10px">${s.paidN?`${pct(s.paid/s.paidN)} of ${fi(s.paidN)} outlets audited in the last ${D.prop.auditDays} days`:"No audits for this selection"}</div></div>`;
+ $("xTabs").innerHTML=XGROUPS.map(([k,l])=>`<button class="chip" type="button" data-g="${k}" aria-pressed="${S.xgroup===k}">By ${k==="msr"?"MSR":l.toLowerCase()}</button>`).join("");
+ $("xTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.xgroup=b.dataset.g;S.xlimit=25;render()});
+ const gi=DIM[S.xgroup],grp=new Map();for(const r of rows){const k=r[gi];(grp.get(k)||grp.set(k,[]).get(k)).push(r)}
+ for(const it of audits){const k=it[S.xgroup+"I"];if(k!=null&&!grp.has(k))grp.set(k,[])}
+ const lst=[...grp].map(([id,rs])=>{const o={id,name:tc(L[S.xgroup][id]),s:xAgg(rs)};const au=audits.filter(it=>it[S.xgroup+"I"]===id);o.s.paid=au.filter(it=>it.paid).length;o.s.paidN=au.length;return o})
+  .sort((a,b)=>b.s[S.xkind]-a.s[S.xkind]||b.s.n-a.s.n||a.name.localeCompare(b.name));
+ const [,lbl,plural]=XGROUPS.find(g=>g[0]===S.xgroup),drill=S.xgroup!=="store",shown=lst.slice(0,S.xlimit);
+ $("xboard").innerHTML=lst.length?`<table><thead><tr><th>${lbl}</th><th>Checks</th>${XKINDS.map(([,l])=>`<th>${l}</th>`).join("")}<th>Paid assets</th></tr></thead><tbody>${shown.map(o=>
+  `<tr${drill?` class="go" tabindex="0" data-id="${o.id}"`:""}><td><span>${esc(o.name)}</span></td><td data-l="Checks">${fi(o.s.n)}</td>${XKINDS.map(([k,l])=>`<td data-l="${l}">${fi(o.s[k])}<small>${pct(xRate(o.s,k))}</small></td>`).join("")}<td data-l="Paid assets">${o.s.paidN?`${fi(o.s.paid)}<small>of ${fi(o.s.paidN)} audited</small>`:"–"}</td></tr>`).join("")}</tbody></table>${
+  lst.length>S.xlimit?`<button class="more" type="button" id="xMore">Show all ${lst.length} ${plural}</button>`:""}`:'<p class="empty">No store checks match these filters. Pick a longer date range or clear a filter.</p>';
+ if($("xMore"))$("xMore").onclick=()=>{S.xlimit=1e9;render()};
+ if(drill)$("xboard").querySelectorAll("tr.go").forEach(tr=>{const go=()=>{S[S.xgroup]=tr.dataset.id;S.xgroup=S.xgroup==="msr"?"store":"msr";S.xlimit=25;S.xAll=false;render();scrollTo({top:0,behavior:"smooth"})};
+  tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go()}});
+ const kindName=LISTKINDS.find(k=>k[0]===S.xkind)[1].toLowerCase();
+ $("xNote").textContent=lst.length?`Most ${kindName} first. The percentage is the share of store checks that answered Yes; paid assets count audited outlets.${drill?" Tap a row to see its "+(S.xgroup==="msr"?"outlets":"MSRs")+".":""}`:"";
+ $("xListTabs").innerHTML=LISTKINDS.map(([k,l])=>`<button class="chip" type="button" data-x="${k}" aria-pressed="${S.xkind===k}">${l} (${fi(s[k])})</button>`).join("");
+ $("xListTabs").querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{S.xkind=b.dataset.x;S.ptype="";S.xAll=false;render()});
+ if(S.xkind==="paid"){renderPaidList(paidA);return}
+ const hits=rows.filter(r=>r[PX[S.xkind]]>0).sort((a,b)=>b[0]-a[0]||L.store[a[5]].localeCompare(L.store[b[5]])),show=S.xAll?hits:hits.slice(0,15);
+ const detail=r=>S.xkind==="so"?`${r[PX.list]?`Out of stock: ${esc(r[PX.list])}`:"Stock out reported, items not listed"}${r[PX.deliv]?`<br>Last delivery ${esc(xDay(r[PX.deliv]))}`:""}`
+  :S.xkind==="exc"?(r[PX.items]?`Items and quantity: ${esc(r[PX.items])}`:"Items not stated"):(r[PX.photo]?"Photo taken":"No photo taken");
+ $("xListTitle").textContent=`${XKINDS.find(k=>k[0]===S.xkind)[1]} reported`;
+ $("xList").innerHTML=hits.length?`<ul class="list">${show.map(r=>`<li><span class="t"><b>${esc(tc(L.store[r[5]]))}</b><small>${esc(tc(L.account[r[2]]))} · ${esc(tc(L.msr[r[4]]))} · ${dt(r[0],{weekday:"short",day:"numeric",month:"short"})}<br>${detail(r)}</small>${
+  S.xkind==="asset"&&/^https?:\/\//.test(r[PX.photo])?`<div class="thumbs">${thumb(r[PX.photo],"Unpaid asset",`Unpaid asset at ${tc(L.store[r[5]])}`)}</div>`:""}</span></li>`).join("")}</ul>${
+  hits.length>15&&!S.xAll?`<button class="more" type="button" id="xlMore">Show all ${fi(hits.length)}</button>`:""}`:`<p class="empty">No ${kindName} reported for this selection.</p>`;
+ if($("xlMore"))$("xlMore").onclick=()=>{S.xAll=true;render()};
+ const src=D.sources.find(x=>/proposition/i.test(x.file));
+ $("xListNote").textContent=`Newest first.${S.xkind==="so"?" Stock outs and last delivery dates are as typed by the MSR.":S.xkind==="asset"?" Photos open from the field app's server.":""}${src?` From ${src.file} (updated ${src.updated}).`:""}`}
+
+// extra displays = unpaid visibility assets the MSR records in the Proposition store check, with their photos
+function renderXD(){
+ const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));
+ $("xscope").textContent=`${who.length?who.join(", "):"All CIL teams"} · ${S.from===S.to?dt(S.from,{weekday:"short",day:"numeric",month:"short"}):dt(S.from)+" to "+dt(S.to)}`;
+ const rows=PP.filter(r=>pass(r)),hits=rows.filter(r=>r[PX.asset]>0);
+ const outlets=new Set(hits.map(r=>r[5])),withPh=hits.filter(r=>photos(r[PX.photo]).length),accs=new Set(hits.map(r=>r[2]));
+ const checked=new Set(rows.filter(r=>r[PX.asset]>=0).map(r=>r[5]));
+ const card=(h,v,sub,cls="")=>`<div class="kpi"><h2>${h}</h2><div class="v ${cls}">${v}</div><div class="sub" style="margin-top:10px">${sub}</div></div>`;
+ const phOutlets=new Set(withPh.map(r=>r[5]));
+ $("xdkpis").innerHTML=card("Outlets checked",fi(checked.size),"Unique outlets that answered")+
+  card("Outlets with extra displays",fi(outlets.size),"",outlets.size?"good":"")+
+  card("Outlets with a photo",fi(phOutlets.size),"")+
+  card("Accounts",fi(accs.size),"Accounts with at least one extra display");
+ // unique outlets per account (the account filter only highlights here)
+ const ag=new Map();for(const r of PP){if(!pass(r,"account"))continue;let a=ag.get(r[2]);if(!a){a={chk:new Set(),xd:new Set(),phs:new Set()};ag.set(r[2],a)}
+  if(r[PX.asset]>=0)a.chk.add(r[5]);if(r[PX.asset]>0){a.xd.add(r[5]);if(photos(r[PX.photo]).length)a.phs.add(r[5])}}
+ const lst=[...ag].map(([id,a])=>({id,name:tc(L.account[id]),u:a.xd.size,c:a.chk.size,ph:a.phs.size})).filter(o=>o.c).sort((a,b)=>b.u-a.u||b.c-a.c||a.name.localeCompare(b.name));
+ const tU=new Set(),tC=new Set(),tP=new Set();for(const a of ag.values()){a.xd.forEach(x=>tU.add(x));a.chk.forEach(x=>tC.add(x));a.phs.forEach(x=>tP.add(x))}
+ const row=(o,cls)=>`<tr class="${cls}"${o.id!=null?` tabindex="0" data-id="${o.id}"`:""}><td><span>${esc(o.name)}</span></td><td data-l="Outlets with extra displays"${o.u?' class="good"':""}><b>${fi(o.u)}</b></td><td data-l="Outlets checked">${fi(o.c)}</td><td data-l="Share">${o.c?pct(o.u/o.c):"–"}</td><td data-l="Outlets with a photo">${fi(o.ph)}</td></tr>`;
+ $("xdBoard").innerHTML=lst.length?`<table><thead><tr><th>Account</th><th>Outlets with extra displays</th><th>Outlets checked</th><th>Share</th><th>Outlets with a photo</th></tr></thead><tbody>${
+  (S.xdZero?lst:lst.filter(o=>o.u>0||S.account===String(o.id))).map(o=>row(o,"go"+(S.account===String(o.id)?" sel":""))).join("")}${lst.length>1?row({id:null,name:"All accounts",u:tU.size,c:tC.size,ph:tP.size},"tot"):""}</tbody></table>${
+  lst.some(o=>!o.u)?`<button class="more" type="button" id="xdZ">${S.xdZero?"Hide accounts with no extra displays":`Show ${fi(lst.filter(o=>!o.u).length)} accounts with no extra displays`}</button>`:""}`:'<p class="empty">No store checks match these filters. Pick a longer date range or clear a filter.</p>';
+ if($("xdZ"))$("xdZ").onclick=()=>{S.xdZero=!S.xdZero;render()};
+ $("xdBoard").querySelectorAll("tr.go").forEach(tr=>{const go=()=>{S.account=S.account===tr.dataset.id?"":tr.dataset.id;S.glimit=24;render();$("xdGalTitle").scrollIntoView({behavior:"smooth",block:"start"})};
+  tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go()}});
+ $("xdNote").textContent="Unique outlets counts each outlet once, however many times its display was reported in the dates selected. Tap an account to see only its photos; tap again to clear.";
+ // gallery: newest photo per outlet, or every photo
+ const ph=withPh.slice().sort((a,b)=>b[0]-a[0]||L.store[a[5]].localeCompare(L.store[b[5]]));
+ const seen=new Set(),uniq=ph.filter(r=>!seen.has(r[5])&&seen.add(r[5]));
+ $("xdTabs").innerHTML=[[false,`Latest per outlet (${fi(uniq.length)})`],[true,`All photos (${fi(ph.length)})`]].map(([k,l])=>`<button class="chip" type="button" data-a="${k}" aria-pressed="${S.gall===k}">${l}</button>`).join("");
+ $("xdTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.gall=b.dataset.a==="true";S.glimit=24;render()});
+ const gl=S.gall?ph:uniq,show=gl.slice(0,S.glimit);
+ $("xdGalTitle").textContent=S.account!==""?`Extra displays at ${tc(L.account[+S.account])}`:"Extra display gallery";
+ $("xdGal").innerHTML=gl.length?`<div class="gal">${show.map(r=>{const u=photos(r[PX.photo])[0],name=tc(L.store[r[5]]);
+  return `<figure><a class="ph" href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img src="${esc(u)}" alt="Extra display at ${esc(name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('noimg')"></a>
+  <figcaption><b>${esc(name)}</b>${esc(tc(L.account[r[2]]))}<br>${esc(tc(L.msr[r[4]]))} · ${dt(r[0],{day:"numeric",month:"short"})}</figcaption></figure>`}).join("")}</div>${
+  gl.length>S.glimit?`<button class="more" type="button" id="galMore">Show ${fi(Math.min(48,gl.length-S.glimit))} more of ${fi(gl.length-S.glimit)}</button>`:""}`
+  :`<p class="empty">${hits.length?"Extra displays were reported but no photos were taken for this selection.":"No extra displays reported for this selection."}</p>`;
+ if($("galMore"))$("galMore").onclick=()=>{S.glimit+=48;render()};
+ const src=D.sources.find(x=>/proposition/i.test(x.file));
+ $("xdGalNote").textContent=`Extra displays are the unpaid visibility assets MSRs record in the Proposition store check, with the photo they take. Newest first; tap a photo to open it full size.${src?` From ${src.file} (updated ${src.updated}).`:""}`}
+
+function renderPaidList(paidA){
+ const list=paidA.filter(it=>!S.ptype||it.ptypes.includes(S.ptype)).sort((a,b)=>b.when.localeCompare(a.when)||a.outlet.localeCompare(b.outlet)),show=S.xAll?list:list.slice(0,15);
+ $("xListTitle").textContent=S.ptype?`${S.ptype} running`:"Paid assets running";
+ const types=["",...new Set(paidA.flatMap(it=>it.ptypes))].sort();
+ const typeChips=`<div class="strip tabs" role="group" aria-label="Paid asset type">${types.map(t=>`<button class="chip" type="button" data-pt="${esc(t)}" aria-pressed="${S.ptype===t}">${t?esc(t):"All types"} (${fi(t?paidA.filter(it=>it.ptypes.includes(t)).length:paidA.length)})</button>`).join("")}</div>`;
+ $("xList").innerHTML=typeChips+(list.length?`<ul class="list">${show.map(it=>{const name=it.store?tc(it.store):it.outlet;
+  const neg=it.neg?`<br>Negotiated: ${esc(it.ntype||"type not given")}${it.ns||it.ne?` · ${esc(dIso(it.ns)||"?")} to ${esc(dIso(it.ne)||"?")}`:""}`:"";
+  return `<li class="tall"><span class="t"><b>${esc(name)}</b><small>${esc(it.ptypes.join(", ")||"Type not given")}<br>${esc(it.account?tc(it.account):"Account not matched")}${it.sup?` · ${esc(tc(it.sup))}`:""} · audited ${esc(dIso(it.when))} by ${esc(it.by)}${neg}</small>
+   ${it.photos.length?`<div class="thumbs">${it.photos.map(([lab,u])=>thumb(u,lab,`${lab} at ${name}`)).join("")}</div>`:""}</span><span class="badge b-good">Paid</span></li>`}).join("")}</ul>${
+  list.length>15&&!S.xAll?`<button class="more" type="button" id="xlMore">Show all ${fi(list.length)}</button>`:""}`:'<p class="empty">No paid assets in the audits for this selection.</p>');
+ $("xList").querySelectorAll("[data-pt]").forEach(b=>b.onclick=()=>{S.ptype=b.dataset.pt;S.xAll=false;render()});
+ if($("xlMore"))$("xlMore").onclick=()=>{S.xAll=true;render()};
+ $("xListNote").textContent=`Latest audit per outlet in the last ${D.prop.auditDays} days, from ${D.prop.paidFile}. The date filter does not apply to audits. Outlet names typed in the audit form are matched to field outlets, so MSR filters only cover matched outlets. Tap a photo to open it full size.`}
+
+// ---------------- feedback
+function renderFeedback(){
+ if(!WEB){$("fbForm").innerHTML=`<h3>Send feedback</h3><p class="note" style="font-size:14px">Feedback is sent from the web link, where you sign in with your login ID. Ask the trade marketing team for the link.</p>`;return}
+ if($("fbForm").dataset.ready===filterText())return;$("fbForm").dataset.ready=filterText();
+ const kpis=["On-shelf availability","Share of shelf","Coverage","Promo execution","Proposition (stock outs, assets, sales)","The platform itself","Something else"];
+ const types=["Insight from the field","Problem with the numbers","Suggestion","Question"];
+ $("fbForm").innerHTML=`<h3>Send feedback</h3><p class="note" style="font-size:14px;margin:0 0 14px">Tell us what you see in the field, or what looks wrong. Your name and the filters you have on are sent with it.</p>
+ <form id="fbf"><div class="two"><label>About<select id="fbK">${kpis.map(k=>`<option>${k}</option>`).join("")}</select></label>
+ <label>Type<select id="fbT">${types.map(k=>`<option>${k}</option>`).join("")}</select></label></div>
+ <div class="two"><label>Outlet (optional)<select id="fbO"><option value="">Not about one outlet</option>${outletOpts()}</select></label>
+ <label>SKU (optional)<select id="fbU"><option value="">Not about one SKU</option>${L.sku.map((s,i)=>`<option value="${i}">${esc(tc(s))}</option>`).join("")}</select></label></div>
+ <label>Your feedback<textarea id="fbM" maxlength="2000" required placeholder="For example: Naivas Kisumu is OOS on Velvex tissue because the order was not delivered."></textarea></label>
+ <button class="btn primary" id="fbS">Send feedback</button></form>`;
+ $("fbf").onsubmit=e=>{e.preventDefault();const m=$("fbM").value.trim();if(!m)return;const b=$("fbS");b.disabled=true;b.textContent="Sending…";
+  call("submitFeedback",TOKEN,{kpi:$("fbK").value,type:$("fbT").value,message:m,system:D.systemTitle,tab:S.tab,filters:filterText(),
+   outlet:$("fbO").value!==""?L.store[+$("fbO").value]:"",sku:$("fbU").value!==""?L.sku[+$("fbU").value]:"",dataVersion:D.generated,
+   period:last>=0?`${L.date[S.from]} to ${L.date[S.to]}`:""}).then(r=>{b.disabled=false;b.textContent="Send feedback";
+   if(r&&r.ok){$("fbM").value="";$("fbO").value="";$("fbU").value="";toast(`Feedback sent (${r.id}). Thank you.`);if(USER&&USER.role==="ADMIN")loadFeedback()}else toast(r&&r.error||"Could not send. Try again.")})
+  .catch(()=>{b.disabled=false;b.textContent="Send feedback";toast("Could not send. Check your connection and try again.")})};
+ if(USER&&USER.role==="ADMIN"){$("fbAdmin").hidden=false;$("fbReload").onclick=loadFeedback;loadFeedback()}}
+function outletOpts(){const set=new Set();for(const r of F)if(pass(r,null,0,last))set.add(r[DIM.store]);for(const r of PR)if(passP(r))set.add(r[PD.store]);
+ return [...set].sort((a,b)=>L.store[a].localeCompare(L.store[b])).map(i=>`<option value="${i}">${esc(tc(L.store[i]))}</option>`).join("")}
+function loadFeedback(){$("fbList").innerHTML='<p class="empty">Loading…</p>';
+ call("getFeedback",TOKEN).then(r=>{if(!r||r.error){$("fbList").innerHTML=`<p class="empty">${esc(r&&r.error||"Could not load feedback.")}</p>`;return}
+  $("fbList").innerHTML=r.rows.length?r.rows.map(f=>`<div class="fb"><small>${esc(f.fid)} · ${esc(f.when)} · ${esc(f.name)} (${esc(f.id)}) · ${esc(f.system)} · ${esc(f.status)}</small>
+   <div><span class="badge b-mut">${esc(f.kpi)}</span> <span class="badge b-warn">${esc(f.type)}</span></div><p>${esc(f.message)}</p>${f.outlet||f.sku?`<small>${esc([f.outlet,f.sku].filter(Boolean).join(" · "))}</small>`:""}${f.filters?`<small>Filters: ${esc(f.filters)}</small>`:""}</div>`).join("")
+   :'<p class="empty">No feedback yet.</p>'}).catch(()=>{$("fbList").innerHTML='<p class="empty">Could not load feedback.</p>'})}
+
+function goTab(t){S.tab=t;render();scrollTo({top:0});track("tab",t)}
+
+// ---------------- wire up
+document.querySelectorAll("#nav button").forEach(b=>b.onclick=()=>goTab(b.dataset.t));
+for(const k of DIMS)$("f"+k[0].toUpperCase()+k.slice(1)).onchange=e=>{S[k]=e.target.value;S.limit=25;S.plimit=25;render()};
+$("fFrom").onchange=e=>{S.from=+e.target.value;if(S.from>S.to)S.to=S.from;render()};
+$("fTo").onchange=e=>{S.to=+e.target.value;if(S.to<S.from)S.from=S.to;render()};
+// filters and outlet lists offer every team with field data or store checks
+function scopeRows(){return S.tab==="prop"?PP:F}
+$("sortSel").onchange=e=>{S.sort=+e.target.value;render()};
+$("reset").onclick=()=>{for(const k of DIMS)S[k]="";S.psku="";if(last>=0){const p=presetRanges()[1];S.from=p[1];S.to=p[2]}render()};
+$("openF").onclick=openSheet;$("closeF").onclick=closeSheet;$("scrim").onclick=closeSheet;
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("sheet").classList.contains("on"))closeSheet()});
+document.querySelectorAll(".share").forEach(btn=>btn.onclick=async()=>{const url=viewLink();
+ if(navigator.share){try{await navigator.share({title:`CIL ${D.systemTitle} performance`,url});return}catch(e){if(e&&e.name==="AbortError")return}}
+ try{await navigator.clipboard.writeText(url);toast("Link to this view copied");return}catch(e){}
+ prompt("Copy this link to share this view",url)});
+let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(S.tab==="overview"&&last>=0)drawTrend(F.filter(r=>pass(r)))},200)});
+addEventListener("hashchange",()=>{if(!INIT){applyParams(new URLSearchParams(location.hash.slice(1)));render()}});
+$("ttl").textContent=`CIL ${D.systemTitle} performance`;document.title=`CIL ${D.systemTitle} MSR performance`;
+$("swap").textContent=D.other.title;$("swap").setAttribute("aria-label",`Switch to ${D.other.title} performance`);
+$("swap").href=INIT&&INIT.base?INIT.base+"?system="+D.other.key.toLowerCase():D.other.file;if(INIT)$("swap").target="_top";
+$("stamp").textContent=`Updated ${D.generated.replace(/ \d{4},/,",")}`;
+$("foot").innerHTML=`${USER?`Signed in as ${esc(USER.name)} (${esc(USER.id)}). <button class="linkbtn" type="button" id="so">Sign out</button>`:""}`;$("foot").hidden=!USER;
+if($("so"))$("so").onclick=signOut;
+applyParams(INIT&&INIT.params?new URLSearchParams(INIT.params):new URLSearchParams(location.hash.slice(1)));
+if(USER&&!(INIT&&INIT.params)){const pick=(k,v)=>{if(!v||S[k]!=="")return;const i=L[k].indexOf(String(v).trim().toUpperCase());if(i>=0)S[k]=String(i)};
+ if(USER.role==="MSR")pick("msr",USER.name);if(USER.role==="SUPERVISOR")pick("supervisor",USER.supervisor||USER.name);else pick("supervisor",USER.supervisor);pick("region",USER.region)}
+render();
+}
+</script></body></html>
