@@ -2,7 +2,7 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610222250"};
+var SITE={feedbackUrl:"",version:"202610222311"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
@@ -27,9 +27,16 @@ function relabel(){try{document.querySelectorAll("label,div,span,p,input").forEa
   if(e.tagName==="INPUT"){var ph=(e.placeholder||"");if(/login id/i.test(ph))e.placeholder="name.code@smollan.net";else if(/^pin/i.test(ph))e.placeholder="e.g. 300349";
     if(e.type==="password"||/pin/i.test(e.id+e.name)){e.setAttribute("inputmode","text");e.removeAttribute("maxlength");e.removeAttribute("pattern")}return}
   if(e.children.length)return;var t=e.textContent.trim();
-  if(t==="Login ID")e.textContent="Email";else if(t==="PIN")e.textContent="Employee code";
-  else if(/Sign in with your login ID and PIN/i.test(t))e.textContent="Sign in with your Smollan email and employee code."})}catch(x){}}
-document.addEventListener("DOMContentLoaded",function(){relabel();setTimeout(relabel,500);setTimeout(relabel,2000)});
+  if(/Sign in with your login ID and PIN/i.test(t))e.textContent="Sign in with your Smollan email and employee code."})}catch(x){}}
+function logos(){try{
+  var gc=document.getElementById("gateCard");
+  if(gc&&gc.querySelector("input")&&!document.getElementById("lgSm")){var d=document.createElement("div");d.id="lgSm";d.style.cssText="text-align:center;margin:0 0 14px";
+    d.innerHTML='<img src="img/smollan.png" alt="Smollan" style="height:64px;border-radius:12px">';gc.insertBefore(d,gc.firstChild)}
+  var bar=document.querySelector("#topbar .bar");
+  if(bar&&!document.getElementById("lgHd")){var h=document.createElement("div");h.id="lgHd";h.style.cssText="display:flex;gap:8px;align-items:center;margin-right:10px";
+    h.innerHTML='<img src="img/smollan.png" alt="Smollan" style="height:32px;border-radius:6px"><img src="img/chandaria.png" alt="Chandaria" style="height:32px;background:#fff;border-radius:6px;padding:2px">';bar.insertBefore(h,bar.firstChild)}
+ }catch(x){}}
+document.addEventListener("DOMContentLoaded",function(){relabel();logos();try{var g=document.getElementById("gate")||document.body;new MutationObserver(function(){relabel();logos()}).observe(g,{childList:true,subtree:true})}catch(x){}});
 function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function showHL(h){var tries=0;(function go(){var host=document.getElementById("t-overview");
   if(!host){if(++tries<40)setTimeout(go,250);return}
