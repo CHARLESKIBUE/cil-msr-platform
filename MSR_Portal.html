@@ -2,7 +2,7 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610220620"};
+var SITE={feedbackUrl:"",version:"202610222129"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
@@ -57,7 +57,7 @@ async function data(t,sys){
   var buf=new Uint8Array(await r.arrayBuffer());
   post("logEvent","L1",b.user,["open",sys.toUpperCase()]).catch(function(){});
   var txt=dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
-  try{var hl=JSON.parse(txt).highlights;if(hl)showHL(hl)}catch(x){}
+  /* 22-Oct-2026: Follow-up note removed from the overview (Charles) - the Promos tab now shows what is pending */
   return txt;
 }
 async function post(fn,t,user,args){

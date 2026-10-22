@@ -2,7 +2,7 @@
 <html lang="en"><head><script>/* GitHub Pages runtime for the CIL MSR platform (21-Oct-2026): sign-in and data are handled in the browser.
    Each person's numbers are encrypted; only their Login ID + PIN unlocks them. Feedback / usage go to the Apps Script web app. */
 (function(){
-var SITE={feedbackUrl:"",version:"202610220620"};
+var SITE={feedbackUrl:"",version:"202610222129"};
 var enc=new TextEncoder(),dec=new TextDecoder();
 function b64d(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return("0"+b.toString(16)).slice(-2)}).join("")}
@@ -57,7 +57,7 @@ async function data(t,sys){
   var buf=new Uint8Array(await r.arrayBuffer());
   post("logEvent","L1",b.user,["open",sys.toUpperCase()]).catch(function(){});
   var txt=dec.decode(await gunzip(await aes(b64d(e.k),buf.slice(0,12),buf.slice(12))));
-  try{var hl=JSON.parse(txt).highlights;if(hl)showHL(hl)}catch(x){}
+  /* 22-Oct-2026: Follow-up note removed from the overview (Charles) - the Promos tab now shows what is pending */
   return txt;
 }
 async function post(fn,t,user,args){
@@ -245,7 +245,7 @@ padding:10px 16px;border-radius:20px;font-size:14px;z-index:30;opacity:0;transit
  <div class="nav" role="tablist" id="nav">
   <button role="tab" data-t="overview" aria-selected="true">Overview</button>
   <button role="tab" data-t="promos" aria-selected="false">Promos</button>
-  <button role="tab" data-t="running" aria-selected="false">Running</button>
+  <button role="tab" data-t="running" aria-selected="false">Promo list</button>
   <button role="tab" data-t="prop" aria-selected="false">Proposition</button>
   <button role="tab" data-t="feedback" aria-selected="false">Feedback</button>
  </div>
@@ -280,7 +280,7 @@ padding:10px 16px;border-radius:20px;font-size:14px;z-index:30;opacity:0;transit
  </div>
  <div class="tab" id="t-running" hidden>
   <div class="scopebar"><div class="scope" id="rscope"></div></div>
-  <section class="panel"><h3>Promos running and their dates</h3>
+  <section class="panel"><h3>Promo list</h3>
    <div class="strip tabs" id="rTabs" role="group" aria-label="Promo status"></div>
    <div id="rList"></div><p class="note" id="rNote"></p></section>
  </div>
@@ -461,7 +461,7 @@ function render(){
  saveLink();refreshFilters();
  document.querySelectorAll("#nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.t===S.tab));
  TABS.forEach(t=>$("t-"+t).hidden=S.tab!==t);
- if(S.tab==="overview")renderOverview();else if(S.tab==="promos")renderPromos();else if(S.tab==="running")renderRunning();else if(S.tab==="prop")renderProp();else renderFeedback()}
+ if(S.tab==="overview")renderOverview();else if(S.tab==="promos")(USER&&USER.role==="MSR"?renderPromosMSR:renderPromos)();else if(S.tab==="running")renderRunning();else if(S.tab==="prop")renderProp();else renderFeedback()}
 
 // ---------------- overview
 function kpiCard(K,v,sub,dl,span,pressed,clickable){const c=rag(v,K.t);
@@ -591,6 +591,36 @@ function outletList(kind,skuFilter){const o=new Map();
  return [...o.values()].filter(q=>kind==="act"?q.a:kind==="yet"?(!q.a&&q.v):(!q.a&&!q.v)).sort((a,b)=>L.store[a.store].localeCompare(L.store[b.store]))}
 function liOutlet(q){const st=q.a?["b-good","Activated"]:q.v?["b-warn","Yet to activate"]:["b-mut","Not visited"];
  return `<li><span class="t"><b>${esc(tc(L.store[q.store]))}</b><small>${esc(tc(L.account[q.acc]))} · ${esc(tc(L.supervisor[q.sup]))}${q.msr!=null&&L.msr[q.msr]!=="UNASSIGNED"?` · ${esc(tc(L.msr[q.msr]))}`:""}<br>${q.run} of ${q.n} promo SKUs running</small></span><span class="badge ${st[0]}">${st[1]}</span></li>`}
+
+// 22-Oct-2026: MSR promo view - outlets first; Yet to activate / Not visited / Activated; tap an outlet for its SKUs
+function renderPromosMSR(){
+ const rows=PR.filter(r=>passP(r)),s=pAgg(rows);
+ $("pscope").textContent=period?`Promo period ${period}`:"";
+ const board=$("pboard").closest("section");if(board)board.hidden=true;
+ $("pListTitle").textContent="My outlets";
+ if(!PR.length){$("pkpis").innerHTML="";$("pListTabs").innerHTML="";$("pList").innerHTML='<p class="empty">No promo report was found in the last run.</p>';$("pListNote").textContent="";return}
+ const o=new Map();
+ for(const r of rows){let q=o.get(r[4]);if(!q){q={store:r[4],acc:r[1],n:0,run:0,v:false,skus:[]};o.set(r[4],q)}
+  const st=r[PST];q.n++;if(st===0)q.run++;if(st<4)q.v=true;q.skus.push([r[5],st])}
+ const outs=[...o.values()],grp={yet:outs.filter(q=>q.v&&q.run<q.n),nv:outs.filter(q=>!q.v),act:outs.filter(q=>q.v&&q.run===q.n)};
+ $("pkpis").innerHTML=`<div class="kpi"><h2>Outlets with promos</h2><div class="v">${fi(outs.length)}</div><div class="sub" style="margin-top:10px">${fi(grp.act.length)} fully activated · ${fi(grp.yet.length)} pending · ${fi(grp.nv.length)} not visited</div></div>`+
+  kpiCard({k:"",name:"Promo execution",t:T.promo},s.rate,`${fi(s.a)} of ${fi(s.n)} promo SKUs running`,null,0,false,false);
+ if(!grp[S.plist])S.plist="yet";
+ const tabs=[["yet","Yet to activate"],["nv","Not visited"],["act","Activated"]];
+ $("pListTabs").innerHTML=tabs.map(([k,l])=>`<button class="chip" type="button" data-l="${k}" aria-pressed="${S.plist===k}">${l} (${fi(grp[k].length)})</button>`).join("");
+ $("pListTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{S.plist=b.dataset.l;S.pAll=false;render()});
+ const STL={0:["good","Running"],1:["bad","Not running"],2:["bad","Not running"],3:["warn","Not checked"],4:["","Not visited"]};
+ const list=grp[S.plist].slice().sort((a,b)=>S.plist==="yet"?((b.n-b.run)-(a.n-a.run))||L.store[a.store].localeCompare(L.store[b.store]):L.store[a.store].localeCompare(L.store[b.store]));
+ const show=S.pAll?list:list.slice(0,30);
+ const badge=q=>!q.v?["b-mut","Not visited"]:q.run===q.n?["b-good","Activated"]:["b-warn",`${q.n-q.run} pending`];
+ $("pList").innerHTML=list.length?show.map(q=>{const b=badge(q),sk=q.skus.slice().sort((x,y)=>(x[1]===0)-(y[1]===0)||L.sku[x[0]].localeCompare(L.sku[y[0]]));
+  return `<details class="promo"><summary><span class="t"><b>${esc(tc(L.store[q.store]))}</b><small>${esc(tc(L.account[q.acc]))}</small><small>${q.run} of ${q.n} promo SKUs running</small></span>
+   <span class="r"><span class="badge ${b[0]}">${b[1]}</span><span>SKUs <span class="chev">›</span></span></span></summary>
+   <div class="lines">${sk.map(([i,st])=>`<div><span>${esc(tc(L.sku[i]))}</span><span><b class="${STL[st][0]}" style="display:inline">${STL[st][1]}</b></span></div>`).join("")}</div></details>`}).join("")+
+  (list.length>30&&!S.pAll?`<button class="more" type="button" id="plMore">Show all ${fi(list.length)}</button>`:"")
+  :`<p class="empty">${S.plist==="yet"?"Nothing pending - every visited outlet has all its promo SKUs running.":S.plist==="nv"?"All your promo outlets have been visited.":"No outlet has all its promo SKUs running yet."}</p>`;
+ if($("plMore"))$("plMore").onclick=()=>{S.pAll=true;render()};
+ $("pListNote").textContent="Tap an outlet to see its promo SKUs. Running = promo up at your last visit."+(P.info&&P.info.file?` From ${P.info.file} (updated ${P.info.updated}).`:"")}
 function renderPromos(){
  const rows=PR.filter(r=>passP(r)&&(S.psku===""||r[5]===+S.psku)),s=pAgg(rows);
  const who=DIMS.filter(k=>S[k]!=="").map(k=>tc(L[k][+S[k]]));if(S.psku!=="")who.push(tc(L.sku[+S.psku]));
@@ -648,7 +678,7 @@ function renderRunning(){
   const when=st==="nodate"?"Dates not found":`${s.toLocaleDateString(undefined,{day:"numeric",month:"short"})} to ${e.toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"})}`;
   const rel=st==="run"?(()=>{const n=Math.round((e-today)/DAY);return n===0?"Ends today":`Ends in ${n} day${n>1?"s":""}`})():st==="soon"?(()=>{const n=Math.round((s-today)/DAY);return `Starts in ${n} day${n>1?"s":""}`})():st==="ended"?(()=>{const n=Math.round((today-e)/DAY);return `Ended ${n} day${n>1?"s":""} ago`})():"";
   const badge={run:["b-good","Running"],soon:["b-warn","Starting soon"],ended:["b-mut","Ended"],nodate:["b-bad","Check dates"]}[st];
-  let act="";if(it.account&&accIdx.has(it.account)){const ai=accIdx.get(it.account),pa=pAgg(PR.filter(r=>r[PD.account]===ai));if(pa.oN)act=`<span>Outlets activated <b class="${rag(pa.orate,T.promo)}" style="display:inline">${pct(pa.orate)}</b></span>`}
+  let act="";
   const lines=it.lines.length?`<div class="lines">${it.lines.slice(0,60).map(l=>`<div><span>${esc(tc(l[0]))}</span><span>${esc([l[1]&&`Offer ${l[1]}`,l[2]&&`was ${l[2]}`,l[3]&&l[3]+" off",l[4]].filter(Boolean).join(" · "))}${(l[5]&&l[5]!==it.start)||(l[6]&&l[6]!==it.end)?`<br>${esc(dIso(l[5]))} to ${esc(dIso(l[6]))}`:""}</span></div>`).join("")}${it.lines.length>60?`<div><span>and ${it.lines.length-60} more lines</span><span></span></div>`:""}</div>`
    :`<div class="lines"><div><span>The SKU lines are in the ${it.kind} file: ${esc(it.file)}</span><span></span></div></div>`;
   return `<details class="promo"><summary><span class="t"><b>${esc(it.account?tc(it.account):"Account not recognised")}</b><small>${esc(it.title)}</small><small>${when}${it.src==="name"?" (from the file name)":it.src==="document"?" (from the document)":""}</small></span>
@@ -830,6 +860,7 @@ if($("so"))$("so").onclick=signOut;
 applyParams(INIT&&INIT.params?new URLSearchParams(INIT.params):new URLSearchParams(location.hash.slice(1)));
 if(USER&&!(INIT&&INIT.params)){const pick=(k,v)=>{if(!v||S[k]!=="")return;const i=L[k].indexOf(String(v).trim().toUpperCase());if(i>=0)S[k]=String(i)};
  if(USER.role==="MSR")pick("msr",USER.name);if(USER.role==="SUPERVISOR")pick("supervisor",USER.supervisor||USER.name);else pick("supervisor",USER.supervisor);pick("region",USER.region)}
+if(USER){const adm=USER.role==="ADMIN"||USER.role==="MANAGER";if(!adm){const pb=document.querySelector('#nav button[data-t="prop"]');if(pb)pb.hidden=true;if(S.tab==="prop")S.tab="overview";$("swap").hidden=true;}}
 if(USER&&USER.role==="MSR"){for(let k=GROUPS.length-1;k>=0;k--)if(["msr","supervisor","region"].includes(GROUPS[k][0]))GROUPS.splice(k,1);if(!GROUPS.some(g=>g[0]===S.group))S.group="account";}
 render();
 }
